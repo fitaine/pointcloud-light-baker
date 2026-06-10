@@ -8,7 +8,7 @@ The goal: open a `.blend` file, run two scripts, get a lit point cloud that matc
 
 ## How it works
 
-LiDAR scans from IGN HD contain 30–60 million points with satellite RGB colour. Blender provides dramatic lighting: area lights, spotlights, moonlight, glowing emission curves traced along the terrain. Instead of re-implementing Blender's physics in Python (which drifts from the real render scene by scene), this pipeline uses the actual Cycles renders themselves:
+IGN LiDAR HD tiles contain geometry only (XYZ + intensity, no colour). A separate IGN orthophoto (BDORTHO, fetched at 0.20 m/px via WMS) is used to colorize the points via PDAL — this is handled by `lidar_pipeline.py` as a prerequisite step. Blender then provides dramatic artistic lighting: area lights, spotlights, moonlight, glowing emission curves traced along the terrain. Instead of re-implementing Blender's physics in Python (which drifts from the real render scene by scene), this pipeline uses the actual Cycles renders themselves:
 
 1. **Orbit renders** — `gs_capture.py` renders 146 frames from cameras orbiting the scene at four elevation rings (8°, 20°, 45°, 70°) + overhead, at 4K. The `.blend` file is never modified.
 2. **Reprojection** — `reproject_lighting.py` / `reproject_copc.py` projects each point of the cloud into every render it is visible from, resolves occlusion with a per-camera depth buffer, and averages the Cycles pixel colors. The point's color is literally a sample of the render.
