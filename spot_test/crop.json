@@ -1,0 +1,11 @@
+{
+  "pipeline": [
+    {"type":"readers.copc","filename":"C:/Users/Tiphaine/Pictures/3D/2026-03-09_Chamechaude/LIDAR/LIDAR Bases IGN/LHD_FXX_0917_6468_PTS_LAMB93_IGN69.copc.laz"},
+    {"type":"readers.copc","filename":"C:/Users/Tiphaine/Pictures/3D/2026-03-09_Chamechaude/LIDAR/LIDAR Bases IGN/LHD_FXX_0917_6469_PTS_LAMB93_IGN69.copc.laz"},
+    {"type":"readers.copc","filename":"C:/Users/Tiphaine/Pictures/3D/2026-03-09_Chamechaude/LIDAR/LIDAR Bases IGN/LHD_FXX_0918_6468_PTS_LAMB93_IGN69.copc.laz"},
+    {"type":"readers.copc","filename":"C:/Users/Tiphaine/Pictures/3D/2026-03-09_Chamechaude/LIDAR/LIDAR Bases IGN/LHD_FXX_0918_6469_PTS_LAMB93_IGN69.copc.laz"},
+    {"type":"filters.merge"},
+    {"type":"filters.crop","bounds":"([917467,918367],[6468037,6468837])"},
+    {"type":"writers.las","filename":"spot_test/spot_crop.laz","compression":true,"minor_version":4,"dataformat_id":7}
+  ]
+}

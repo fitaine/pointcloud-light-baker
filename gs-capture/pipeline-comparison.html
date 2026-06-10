@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LiDAR Visualization — Pipeline Comparison</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d0d0d;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', sans-serif;
+    padding: 40px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 300;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: #c8f0e0;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    font-size: 12px;
+    color: #555;
+    letter-spacing: .06em;
+    margin-bottom: 40px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+  }
+  .card {
+    background: #161616;
+    border: 1px solid #222;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid #222;
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .card-sub {
+    font-size: 11px;
+    color: #555;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 9px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 2px;
+    margin-top: 8px;
+  }
+  .badge-done    { background: #1a3a2a; color: #c8f0e0; border: 1px solid #2a5a3a; }
+  .badge-built   { background: #1a2a3a; color: #a0d0f0; border: 1px solid #2a4a6a; }
+  .badge-partial { background: #2a2a1a; color: #f0e0a0; border: 1px solid #5a5a2a; }
+  .badge-skip    { background: #2a1a1a; color: #f0a0a0; border: 1px solid #5a2a2a; }
+
+  .card-body { padding: 16px 20px; }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .metric {
+    background: #111;
+    border-radius: 3px;
+    padding: 8px 10px;
+  }
+  .metric-label {
+    font-size: 9px;
+    color: #444;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: 3px;
+  }
+  .metric-value {
+    font-size: 12px;
+    color: #ccc;
+  }
+
+  .pros-cons { margin-top: 4px; }
+  .section-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    margin-bottom: 6px;
+    margin-top: 10px;
+  }
+  .pros .section-label { color: #4a9a6a; }
+  .cons .section-label { color: #9a4a4a; }
+
+  ul { list-style: none; padding: 0; }
+  li {
+    font-size: 11px;
+    color: #aaa;
+    padding: 3px 0 3px 14px;
+    position: relative;
+    line-height: 1.4;
+  }
+  .pros li::before { content: '+'; position: absolute; left: 0; color: #4a9a6a; font-weight: 700; }
+  .cons li::before { content: '−'; position: absolute; left: 0; color: #9a4a4a; font-weight: 700; }
+
+  .verdict {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: #111;
+    border-left: 2px solid #333;
+    border-radius: 2px;
+    font-size: 11px;
+    color: #888;
+    font-style: italic;
+    line-height: 1.5;
+  }
+  .verdict strong { color: #c8f0e0; font-style: normal; }
+
+  /* star rating */
+  .stars { color: #c8a040; font-size: 13px; letter-spacing: 1px; }
+  .stars-empty { color: #2a2a2a; }
+
+  .highlight { border-color: #2a5a3a; }
+  .highlight .card-header { border-bottom-color: #2a5a3a; }
+</style>
+</head>
+<body>
+
+<h1>LiDAR Visualization — Pipeline Comparison</h1>
+<p class="subtitle">Tiphaine Buccino · June 2026 · IGN LiDAR HD scenes</p>
+
+<div class="grid">
+
+  <!-- 2D MEGA RENDER -->
+  <div class="card highlight">
+    <div class="card-header">
+      <div class="card-title">2D Mega-Render + DZI</div>
+      <div class="card-sub">Cycles → render_tiles_unlimited → OpenSeadragon</div>
+      <span class="badge badge-done">✓ Production</span>
+    </div>
+    <div class="card-body">
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">Output size</div>
+          <div class="metric-value">120k × 120k px</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Render time</div>
+          <div class="metric-value">~100 hours</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Visual quality</div>
+          <div class="metric-value"><span class="stars">★★★★★</span></div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Web delivery</div>
+          <div class="metric-value"><span class="stars">★★★★★</span></div>
+        </div>
+      </div>
+      <div class="pros-cons">
+        <div class="pros">
+          <div class="section-label">Strengths</div>
+          <ul>
+            <li>Photorealistic Cycles quality — exact artist control</li>
+            <li>Infinite deep zoom — full detail at any scale</li>
+            <li>Works perfectly in browser (OpenSeadragon)</li>
+            <li>Filmic/AgX color, custom lighting, atmosphere</li>
+            <li>Already battle-tested across 15+ scenes</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <div class="section-label">Weaknesses</div>
+          <ul>
+            <li>100h render per scene — long iteration cycle</li>
+            <li>Static — no interactivity, no 3D rotation</li>
+            <li>Single viewpoint only</li>
+          </ul>
+        </div>
+      </div>
+      <div class="verdict"><strong>Verdict:</strong> The gold standard. Unmatched quality. The right tool for final publication.</div>
+    </div>
+  </div>
+
+  <!-- 3DGS -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">3D Gaussian Splatting</div>
+      <div class="card-sub">gs_capture.py → Nerfstudio splatfacto</div>
+      <span class="badge badge-built">✓ Built · tested</span>
+    </div>
+    <div class="card-body">
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">Capture time</div>
+          <div class="metric-value">2h (110 frames)</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Training time</div>
+          <div class="metric-value">6h (30k steps)</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Visual quality</div>
+          <div class="metric-value"><span class="stars">★★☆</span><span class="stars-empty">☆☆</span></div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Web delivery</div>
+          <div class="metric-value"><span class="stars">★★★</span><span class="stars-empty">☆☆</span></div>
+        </div>
+      </div>
+      <div class="pros-cons">
+        <div class="pros">
+          <div class="section-label">Strengths</div>
+          <ul>
+            <li>Full 3D — orbit freely around the scene</li>
+            <li>Real-time rendering in browser</li>
+            <li>Pipeline is fully automated (drag-and-drop .bat)</li>
+            <li>Useful as a 3D draft / pre-viz tool</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <div class="section-label">Weaknesses</div>
+          <ul>
+            <li>Fog / haze — quality far below 2D renders</li>
+            <li>8h total pipeline for mediocre output</li>
+            <li>Needs CUDA toolkit, Nerfstudio, Python env</li>
+            <li>Bad at large open terrain (best for bounded objects)</li>
+            <li>No artistic control — lighting is baked as-is</li>
+          </ul>
+        </div>
+      </div>
+      <div class="verdict"><strong>Verdict:</strong> Wrong tool for this use case. Maybe useful as a quick 3D draft before committing to a 100h render.</div>
+    </div>
+  </div>
+
+  <!-- POTREE -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Potree Point Cloud</div>
+      <div class="card-sub">Raw LiDAR PLY → Potree converter → browser</div>
+      <span class="badge badge-partial">~ Built · untested</span>
+    </div>
+    <div class="card-body">
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">Source</div>
+          <div class="metric-value">Raw LiDAR PLY</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Processing</div>
+          <div class="metric-value">~10 min</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Visual quality</div>
+          <div class="metric-value"><span class="stars">★★★</span><span class="stars-empty">☆☆</span></div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Web delivery</div>
+          <div class="metric-value"><span class="stars">★★★★</span><span class="stars-empty">☆</span></div>
+        </div>
+      </div>
+      <div class="pros-cons">
+        <div class="pros">
+          <div class="section-label">Strengths</div>
+          <ul>
+            <li>Shows the raw LiDAR data — authentic, no reconstruction</li>
+            <li>Full 3D orbit, pan, zoom in browser</li>
+            <li>Fast to generate (no render, no training)</li>
+            <li>Scales to 60M+ points with LOD streaming</li>
+            <li>Different aesthetic — point cloud look is interesting</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <div class="section-label">Weaknesses</div>
+          <ul>
+            <li>No Cycles lighting or atmosphere</li>
+            <li>Gaps in vertical surfaces (aerial scan limitation)</li>
+            <li>Less polished than your Blender renders</li>
+            <li>Never tested end-to-end yet</li>
+          </ul>
+        </div>
+      </div>
+      <div class="verdict"><strong>Verdict:</strong> Worth testing. Fastest path to interactive 3D. Different aesthetic from the renders — could complement rather than compete.</div>
+    </div>
+  </div>
+
+  <!-- VIDEO TURNTABLE -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Video Turntable</div>
+      <div class="card-sub">Blender orbital camera → rendered video</div>
+      <span class="badge badge-skip">○ Not tried</span>
+    </div>
+    <div class="card-body">
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">Render time</div>
+          <div class="metric-value">4–12h (120 frames)</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Output</div>
+          <div class="metric-value">MP4 / WebM</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Visual quality</div>
+          <div class="metric-value"><span class="stars">★★★★★</span></div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Web delivery</div>
+          <div class="metric-value"><span class="stars">★★★★</span><span class="stars-empty">☆</span></div>
+        </div>
+      </div>
+      <div class="pros-cons">
+        <div class="pros">
+          <div class="section-label">Strengths</div>
+          <ul>
+            <li>Full Cycles quality on every frame</li>
+            <li>Gives the "3D feel" without training</li>
+            <li>Embeds anywhere — Instagram, website, email</li>
+            <li>gs_capture.py already renders the orbital frames</li>
+            <li>Great for social media — reusable as a Reel/Story</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <div class="section-label">Weaknesses</div>
+          <ul>
+            <li>Linear — viewer can't control the camera</li>
+            <li>Fixed path — not truly interactive</li>
+            <li>File size can be large for web</li>
+          </ul>
+        </div>
+      </div>
+      <div class="verdict"><strong>Verdict:</strong> <strong>Most promising unexplored option.</strong> Cycles quality + motion. The orbital frames from gs_capture.py could be assembled directly into a video.</div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top:32px; font-size:11px; color:#333; text-align:right;">
+  Generated June 2026 · LiDAR IGN HD pipeline
+</div>
+
+</body>
+</html>

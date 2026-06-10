@@ -45,3 +45,6 @@ desktop.ini
 prototype-v2-splat/
 convert_ply_to_splat.py
 gs-capture/output/
+potree/Potree_1.8.2/
+spot_test/*.laz
+spot_test/*.npy

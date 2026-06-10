@@ -88,14 +88,15 @@ Timing: ~2 min for 7M pts × 146 cameras. Coverage: ~97%.
 Full quality path — colors the original unprocessed IGN HD tiles (30–60M pts per tile) directly:
 
 ```bash
-python reproject_copc.py <reference.ply> <capture_dir> <tiles_dir> <out_dir> --origin X,Y,Z
+python reproject_copc.py tiles <capture_dir> <tiles_dir> <out_dir>
 ```
 
-- `<reference.ply>` — the full HD PLY used to build per-camera depth buffers (same scene, same world frame)
+- `tiles` — build per-camera depth buffers from the raw tiles themselves (recommended; a PLY path is also accepted but must be in the Blender world frame)
 - `<tiles_dir>` — folder of raw IGN `.copc.laz` tiles
-- `--origin` — the Lambert-93 offset used when processing the cloud (`lidar_pipeline.py --origin`)
 
-Phase A builds depth buffers (one per camera, from the reference cloud) — ~9 min for 59M pts × 146 cameras.  
+**Frame alignment is automatic.** The cloud loaded in the .blend is generally *not* in the `lambert − origin` frame (it may be recentered, cropped, or a different processing run). `gs_capture.py` exports `cloud_dem.npy` — a 10 m elevation grid of the loaded cloud, in the same world frame as the render cameras. `reproject_copc.py` builds the same grid from the raw tiles and cross-correlates to recover the exact offset (verified at 0.7 m residual on Chamechaude). If the best fit is worse than 2 m the script **aborts** rather than producing a silently misaligned cloud. `--origin X,Y,Z` remains as a manual override.
+
+Phase A builds depth buffers (one per camera) — ~9 min for 59M pts × 146 cameras.  
 Phase B colors each tile — ~15 min per tile.
 
 ---
@@ -130,9 +131,11 @@ cd potree && python server.py 8081   # range-request server required
 
 ## Coordinate alignment
 
-The reprojection requires the point cloud and the Blender renders to share the same coordinate frame. The safest source is always a PLY exported directly from Blender (via MCP stride-sampling). For raw IGN tiles, pass `--origin` matching the value used in `lidar_pipeline.py`.
+The reprojection requires the point cloud and the Blender renders to share the same coordinate frame. **Never assume the mapping — measure it.** The Chamechaude full-res run initially failed exactly this way: the .blend used a 2×2 km recentered cloud offset (865.5, 951.9, 282.6) m from the assumed `lambert − origin` frame, so the renders were painted ~1.3 km off-terrain.
 
-A non-identity `matrix_world` on the PC object (e.g. Aiguille Dibona, offset −1478, −1041, −744) is handled automatically by `extract_lights.py` and the reference PLY export.
+The pipeline now solves this automatically by DEM cross-correlation (see Step 2b): the capture exports an elevation grid of the cloud the cameras actually saw, reprojection matches it against the raw tiles, and a >2 m residual aborts the run. Translation-only by design — a rotated or scaled cloud fails the residual check loudly instead of producing garbage.
+
+A non-identity `matrix_world` on the PC object (e.g. Aiguille Dibona, offset −1478, −1041, −744) is applied when exporting the DEM, so it's covered by the same mechanism.
 
 ---
 

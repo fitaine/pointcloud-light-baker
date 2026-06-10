@@ -67,17 +67,98 @@ def project(xyz, R, C, fl, cx, cy, W, H):
     return u, v, depth, inb
 
 
+MAX_ALIGN_RESIDUAL = 2.0   # metres — abort if the frames don't truly match
+
+
+def auto_align(capture_dir, tiles_dir):
+    """Find the lambert→blend transform by DEM cross-correlation.
+
+    gs_capture.py exports cloud_dem.npy — a max-Z grid of the cloud actually
+    loaded in the .blend, in the same world frame as the render cameras.
+    We build the same grid from the raw tiles and slide one over the other.
+    Returns `blend_offset` such that  blend = lambert - blend_offset.
+    Aborts loudly if the best fit is worse than MAX_ALIGN_RESIDUAL — a silent
+    misalignment paints the light onto the wrong terrain.
+    """
+    dem_path = os.path.join(capture_dir, 'cloud_dem.npy')
+    meta_path = os.path.join(capture_dir, 'cloud_dem_meta.json')
+    if not (os.path.exists(dem_path) and os.path.exists(meta_path)):
+        sys.exit(f"ERROR: {dem_path} missing.\n"
+                 "Re-run gs_capture.py (it now exports the cloud DEM), or create\n"
+                 "cloud_dem.npy from the open .blend — see gs_capture.py source.")
+    bdem = np.load(dem_path)
+    with open(meta_path) as f:
+        meta = json.load(f)
+    bmn = np.array(meta['min_xy'], dtype=np.float64)
+    cell = float(meta['cell'])
+    bW, bH = bdem.shape
+    bval = bdem > -1e8
+
+    # raw-tile DEM at the same cell size (stride-read for speed)
+    import laspy as _laspy
+    tiles = sorted(f for f in os.listdir(tiles_dir)
+                   if f.lower().endswith(('.laz', '.las')))
+    gx0 = gy0 = np.inf
+    gx1 = gy1 = -np.inf
+    for t in tiles:
+        h = _laspy.open(os.path.join(tiles_dir, t)).header
+        gx0, gx1 = min(gx0, h.x_min), max(gx1, h.x_max)
+        gy0, gy1 = min(gy0, h.y_min), max(gy1, h.y_max)
+    W = int((gx1 - gx0) / cell) + 1
+    H = int((gy1 - gy0) / cell) + 1
+    rdem = np.full(W * H, -1e9, dtype=np.float32)
+    for t in tiles:
+        las = _laspy.read(os.path.join(tiles_dir, t))
+        xy = np.stack([np.asarray(las.x), np.asarray(las.y)], axis=1)[::25]
+        z = np.asarray(las.z)[::25]
+        ij = ((xy - [gx0, gy0]) / cell).astype(np.int32)
+        np.maximum.at(rdem, ij[:, 0] * H + ij[:, 1], z.astype(np.float32))
+        del las
+    rdem = rdem.reshape(W, H)
+    log(f"alignment DEMs: blend {bW}x{bH}, tiles {W}x{H} @ {cell}m")
+
+    best = None
+    for dx in range(0, W - bW + 1):
+        for dy in range(0, H - bH + 1):
+            sub = rdem[dx:dx+bW, dy:dy+bH]
+            m = bval & (sub > -1e8)
+            if m.sum() < 5000:
+                continue
+            dz = sub[m] - bdem[m]
+            med = np.median(dz)
+            err = np.mean(np.abs(dz - med))
+            if best is None or err < best[0]:
+                best = (err, dx, dy, med)
+    if best is None:
+        sys.exit("ERROR: no DEM overlap found between blend cloud and tiles.")
+    err, dx, dy, dz = best
+    tx = (gx0 + dx * cell) - bmn[0]
+    ty = (gy0 + dy * cell) - bmn[1]
+    log(f"auto-align: blend + ({tx:.1f}, {ty:.1f}, {dz:.1f}) = lambert   "
+        f"residual {err:.2f} m")
+    if err > MAX_ALIGN_RESIDUAL:
+        sys.exit(f"ERROR: alignment residual {err:.2f} m > {MAX_ALIGN_RESIDUAL} m.\n"
+                 "The cloud in the .blend does not match these tiles (wrong scene,\n"
+                 "wrong tiles_dir, or the cloud was scaled/rotated). Refusing to\n"
+                 "produce a misaligned reprojection.")
+    return np.array([tx, ty, dz], dtype=np.float64)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('reference_ply')
     ap.add_argument('capture_dir')
     ap.add_argument('tiles_dir')
     ap.add_argument('out_dir')
-    ap.add_argument('--origin', required=True,
-                    help='X,Y,Z Lambert-93 origin used when building the Blender cloud')
+    ap.add_argument('--origin', default=None,
+                    help='Override X,Y,Z lambert→blend offset (skips auto-align)')
     args = ap.parse_args()
 
-    origin = np.array([float(v) for v in args.origin.split(',')], dtype=np.float64)
+    if args.origin:
+        origin = np.array([float(v) for v in args.origin.split(',')], dtype=np.float64)
+        log(f"manual origin {origin}")
+    else:
+        origin = auto_align(args.capture_dir, args.tiles_dir)
     os.makedirs(args.out_dir, exist_ok=True)
 
     with open(os.path.join(args.capture_dir, 'transforms.json')) as f:
@@ -96,9 +177,30 @@ def main():
 
     bw, bh = W // ZBUF_DOWNSCALE, H // ZBUF_DOWNSCALE
 
-    # ── Phase A: z-buffers from the reference cloud ─────────────────────────
-    print(f"Phase A — z-buffers from {args.reference_ply}")
-    ref = read_ply_xyz(args.reference_ply)
+    # ── Phase A: z-buffers ──────────────────────────────────────────────────
+    # Built from the raw tiles themselves (strided), shifted into the blend
+    # frame with the SAME offset as Phase B — one frame, no reference-PLY
+    # frame assumptions. A 1/8 stride still gives ~50M+ points, far denser
+    # than the z-buffer grid needs.
+    if args.reference_ply.lower() == 'tiles':
+        print("Phase A — z-buffers from strided raw tiles")
+        ZSTRIDE = 8
+        parts = []
+        for t in sorted(os.listdir(args.tiles_dir)):
+            if not t.lower().endswith(('.laz', '.las')):
+                continue
+            las = laspy.read(os.path.join(args.tiles_dir, t))
+            parts.append((np.stack([np.asarray(las.x), np.asarray(las.y),
+                                    np.asarray(las.z)], axis=1)[::ZSTRIDE]
+                          - origin).astype(np.float64))
+            del las
+        ref = np.concatenate(parts)
+        del parts
+    else:
+        print(f"Phase A — z-buffers from {args.reference_ply}")
+        print("WARNING: the PLY must be in the BLEND world frame (e.g. exported "
+              "from the open .blend). Pass 'tiles' to build from raw tiles instead.")
+        ref = read_ply_xyz(args.reference_ply)
     log(f"{len(ref):,} reference points")
     zbufs = np.full((len(cams), bh * bw), np.inf, dtype=np.float32)
     for ci, (R, C, _) in enumerate(cams):

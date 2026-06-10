@@ -1,0 +1,6 @@
+{
+  "pipeline": [
+    {"type":"readers.las","filename":"spot_test/spot_sat.laz"},
+    {"type":"writers.copc","filename":"potree/pointclouds/spot_sat.copc.laz"}
+  ]
+}

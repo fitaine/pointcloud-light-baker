@@ -63,6 +63,46 @@ scene.cycles.use_denoising              = True
 print("[GS Capture] Forcing depsgraph evaluation (GN bounding boxes) …")
 bpy.context.scene.frame_set(bpy.context.scene.frame_current)
 
+# ── Export cloud DEM for automatic frame alignment ───────────────────────────
+# The point cloud in the .blend may be recentered / offset relative to the raw
+# LiDAR tiles (lidar_pipeline recenters PLYs; artists move objects). The render
+# cameras live in the .blend's world frame, so reprojection scripts need the
+# transform between that frame and the raw-tile (Lambert-93) frame.
+# Rather than trusting any per-scene constant, we export a coarse elevation
+# grid (max-Z per 10 m cell) of the loaded cloud, in the SAME world frame as
+# the cameras. reproject_copc.py builds the same grid from the raw tiles and
+# cross-correlates — alignment becomes automatic and verifiable per scene.
+import numpy as np
+DEM_CELL = 10.0
+_pc_pts = []
+for _o in bpy.context.scene.objects:
+    if _o.type == 'MESH' and len(_o.data.polygons) == 0 and len(_o.data.vertices) > 0:
+        _n = len(_o.data.vertices)
+        _co = np.empty(_n * 3, dtype=np.float32)
+        _o.data.vertices.foreach_get('co', _co)
+        _co = _co.reshape(-1, 3)
+        _mw = np.array(_o.matrix_world)
+        if not np.allclose(_mw, np.eye(4), atol=1e-6):
+            _co = _co @ _mw[:3, :3].T + _mw[:3, 3]   # apply object transform
+        _pc_pts.append(_co)
+        print(f"[GS Capture] cloud DEM: '{_o.name}' {_n:,} verts")
+if _pc_pts:
+    _co = np.concatenate(_pc_pts)
+    _mn = _co[:, :2].min(0)
+    _ij = ((_co[:, :2] - _mn) / DEM_CELL).astype(np.int32)
+    _W, _H = int(_ij[:, 0].max()) + 1, int(_ij[:, 1].max()) + 1
+    _dem = np.full(_W * _H, -1e9, dtype=np.float32)
+    np.maximum.at(_dem, _ij[:, 0] * _H + _ij[:, 1], _co[:, 2])
+    np.save(os.path.join(output_dir, "cloud_dem.npy"), _dem.reshape(_W, _H))
+    with open(os.path.join(output_dir, "cloud_dem_meta.json"), "w") as _f:
+        json.dump({"min_xy": _mn.tolist(), "cell": DEM_CELL,
+                   "shape": [_W, _H]}, _f)
+    print(f"[GS Capture] cloud DEM {_W}x{_H} @ {DEM_CELL}m → cloud_dem.npy")
+    del _pc_pts, _co
+else:
+    print("[GS Capture] WARNING: no point-cloud object found — no cloud_dem.npy "
+          "(reprojection will need a manual origin)")
+
 # ── Resolve orbit target ─────────────────────────────────────────────────────
 # Preferred : Empty named exactly GS_TARGET in the .blend.
 # Fallback  : bounding-box centre of renderable meshes.
