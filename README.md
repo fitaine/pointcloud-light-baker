@@ -1,128 +1,164 @@
 # pointcloud-light-baker
 
-A pipeline for baking Blender artistic lighting into LiDAR point clouds and displaying them in a web viewer alongside 2D renders.
+A pipeline for displaying LiDAR point clouds with Blender artistic lighting in a web viewer, as a 3D companion to 2D photographic renders.
 
-The goal: a 3D companion to each image in a deep-zoom photography/LiDAR website. Drop a `.blend` file, get a lit, web-ready point cloud that visually matches the Blender Cycles render.
-
----
-
-## What it does
-
-LiDAR scans from IGN HD contain 30–60 million points with satellite RGB colour. Blender provides dramatic lighting: area lights, spotlights, suns, and glowing emission curves traced along the terrain. This pipeline:
-
-1. **Extracts** all lights, emission curves, and scene transforms from the open `.blend` (read-only, never modifies the file)
-2. **Bakes** irradiance onto each point using physically-based formulas that match Blender Cycles output — including surface normals, terrain self-shadowing, and Lambertian shading
-3. **Outputs** a lit PLY file ready for web display
+The goal: open a `.blend` file, run two scripts, get a lit point cloud that matches the Blender Cycles render — for every scene, with no per-scene tuning.
 
 ---
 
-## Current state
+## How it works
 
-- Satellite RGB + dramatic Blender lighting: ✅
-- POINT / SPOT / AREA / SUN light types: ✅
-- Emission bezier curves (line lights): ✅
-- Terrain self-shadowing (heightfield ray-march): ✅
-- Surface normal estimation (k-NN PCA): ✅
-- Cross-scene calibration (K_GLOBAL / K_SUN / K_CURVE): ✅
-- Per-scene exposure override via `scene_lights.json`: ✅
-- Emission mesh objects: 🔜
-- Full-resolution display via raw COPC tiles: 🔜
-- Drag-and-drop `.blend` launcher: 🔜
+LiDAR scans from IGN HD contain 30–60 million points with satellite RGB colour. Blender provides dramatic lighting: area lights, spotlights, moonlight, glowing emission curves traced along the terrain. Instead of re-implementing Blender's physics in Python (which drifts from the real render scene by scene), this pipeline uses the actual Cycles renders themselves:
+
+1. **Orbit renders** — `gs_capture.py` renders 146 frames from cameras orbiting the scene at four elevation rings (8°, 20°, 45°, 70°) + overhead, at 4K. The `.blend` file is never modified.
+2. **Reprojection** — `reproject_lighting.py` / `reproject_copc.py` projects each point of the cloud into every render it is visible from, resolves occlusion with a per-camera depth buffer, and averages the Cycles pixel colors. The point's color is literally a sample of the render.
+3. **Web display** — the lit cloud is converted to COPC format for streaming display in a Potree viewer (LOD, 60M+ pts), or loaded directly in the Three.js prototype viewer (< 15M pts).
+
+Because the colors come from real Cycles renders, **any light type, material, or color management setting works automatically** — there are no physics constants to calibrate, no per-scene tuning variables.
 
 ---
 
 ## Pipeline
 
 ```
-.blend (Blender, read-only)
+.blend  (read-only — never modified or saved)
     │
-    ├─ extract_lights.py  →  scene_lights.json   (run in Blender Script Editor)
-    │
-    └─ bake_lighting.py <input.ply> <scene_lights.json> <output.ply>
-                                                  (pure Python, no Blender needed)
-                                │
-                                ▼
-                        lit point cloud PLY
-                                │
-               ┌────────────────┴────────────────┐
-               ▼                                 ▼
-        prototype/                           potree/
-        Three.js viewer                  Potree COPC viewer
-        (< 15M pts)                      (60M+ pts, LOD)
+    └─ gs_capture.py  →  images/ (146 × 4K WebP)  +  transforms.json
+                                    │
+                     reproject_lighting.py          reproject_copc.py
+                     (web PLY, < 15M pts)           (raw IGN COPC tiles, full HD)
+                                    │                       │
+                             lit web PLY              lit LAZ tiles
+                                    │                       │
+                             prototype/              pdal merge → COPC
+                             Three.js viewer         potree/ Potree viewer
+                             (preview, fast)         (full quality, LOD)
 ```
 
 ### Requirements
 
 ```
-pip install numpy scipy
+pip install numpy scipy pillow laspy lazrs
 ```
 
-PDAL (via QGIS) for COPC conversion. No Blender install needed to run the bake.
+PDAL (via QGIS) for COPC conversion. No Blender install needed to run the reprojection.
 
-### Quick start
+---
+
+## Step 1 — Orbit renders (`gs_capture.py`)
+
+Run via `gs-capture/launcher.bat` — drag your `.blend` onto it, or run from command line:
+
+```bat
+blender --background scene.blend --python gs_capture.py -- <output_dir> <scene_name>
+```
+
+Renders 146 frames (4K, 64 samples + denoising, WebP) and writes `transforms.json` with exact camera matrices. Timing: ~50 s/frame → ~2 h total.
+
+**Tunable constants** (top of `gs_capture.py`, no .blend modification needed):
+
+| Constant | Default | Notes |
+|---|---|---|
+| `RENDER_WIDTH/HEIGHT` | 3840 × 2160 | 4K — higher = sharper point colors |
+| `RENDER_SAMPLES` | 64 | + denoising, enough for reprojection |
+| `RENDER_FORMAT` | WEBP | smaller than JPEG, lossless quality |
+| `ELEVATIONS` | [8, 20, 45, 70] | rings in degrees — 8° catches low cliff faces |
+| `STEPS_PER_RING` | 36 | cameras per ring (every 10°) |
+| `TARGET_NAME` | `GS_TARGET` | name an Empty in the .blend to control orbit centre |
+
+---
+
+## Step 2a — Reproject onto web PLY (`reproject_lighting.py`)
+
+For preview and Three.js viewer (< 15M pts):
 
 ```bash
-# Step 1 — in Blender Script Editor (read-only)
-# Open extract_lights.py → Run Script
-# Writes scene_lights.json next to the .blend
+python reproject_lighting.py <input.ply> <capture_dir> <output-lit.ply>
+```
 
-# Step 2 — bake
-python bake_lighting.py input.ply scene_lights.json output-lit.ply
+- `<input.ply>` — point cloud in Blender world frame (stride-export from Blender via MCP, or a processed web PLY)
+- `<capture_dir>` — folder containing `transforms.json` + `images/` from gs_capture.py
 
-# Step 3 — view (Three.js, < 15M pts)
+Timing: ~2 min for 7M pts × 146 cameras. Coverage: ~97%.
+
+---
+
+## Step 2b — Reproject onto raw IGN COPC tiles (`reproject_copc.py`)
+
+Full quality path — colors the original unprocessed IGN HD tiles (30–60M pts per tile) directly:
+
+```bash
+python reproject_copc.py <reference.ply> <capture_dir> <tiles_dir> <out_dir> --origin X,Y,Z
+```
+
+- `<reference.ply>` — the full HD PLY used to build per-camera depth buffers (same scene, same world frame)
+- `<tiles_dir>` — folder of raw IGN `.copc.laz` tiles
+- `--origin` — the Lambert-93 offset used when processing the cloud (`lidar_pipeline.py --origin`)
+
+Phase A builds depth buffers (one per camera, from the reference cloud) — ~9 min for 59M pts × 146 cameras.  
+Phase B colors each tile — ~15 min per tile.
+
+---
+
+## Step 3 — Convert to COPC for Potree
+
+```bat
+REM Merge all lit tiles then convert
+pdal merge tiles\*_lit.laz merged.laz
+convert_to_copc.bat merged.laz chamechaude-full
+```
+
+Uses PDAL bundled with QGIS. Output: `potree/pointclouds/<name>.copc.laz`.
+
+---
+
+## Step 4 — View
+
+**Three.js prototype** (< 15M pts, instant):
+```bash
 cd prototype && python -m http.server 8080
-# open http://localhost:8080/?scene=<scene-id>
+# http://localhost:8080/?scene=<scene-id>
+```
 
-# Step 3 — view (Potree, 60M+ pts with LOD)
-# Convert first:
-convert_to_copc.bat output-lit.ply scene-id
-# Then:
-cd potree && python server.py 8081
-# open http://localhost:8081/?scene=scene-id
+**Potree** (60M+ pts, LOD streaming):
+```bash
+cd potree && python server.py 8081   # range-request server required
+# http://localhost:8081/?scene=<scene-id>
 ```
 
 ---
 
-## Per-scene tuning (no code changes)
+## Coordinate alignment
 
-After running `extract_lights.py`, the generated `scene_lights.json` accepts optional overrides:
+The reprojection requires the point cloud and the Blender renders to share the same coordinate frame. The safest source is always a PLY exported directly from Blender (via MCP stride-sampling). For raw IGN tiles, pass `--origin` matching the value used in `lidar_pipeline.py`.
 
-```json
-{
-  "exposure": 1.2,         // global brightness multiplier (all lights)
-  "curve_exposure": 0.6,   // emission curves only
-  "lights": [
-    {
-      "name": "key light",
-      "energy_scale": 0.5  // trim this specific light
-    }
-  ]
-}
-```
-
-All keys default to `1.0` if absent.
-
----
-
-## Point cloud coordinate alignment
-
-The bake script aligns the PLY to Blender world space using the PC object's `matrix_world` (exported in `scene_lights.json`). The safest input is a PLY exported directly from Blender's loaded scene — this guarantees the coordinate frames match. Alternatively, any PLY processed with the same `--origin` parameter as the Blender-loaded cloud will align correctly.
-
----
-
-## Roadmap
-
-- **Drag-and-drop launcher** — drop a `.blend`, the full pipeline runs automatically (export web PLY from Blender, extract lights, bake, convert to COPC)
-- **Orbit target empty** — place an empty named `VIEWER_TARGET` in the `.blend` to set the camera orbit point; fallback to terrain bounding-box centre
-- **Emission meshes** — bake light from mesh objects with Emission material (currently only bezier curves are supported)
-- **COPC raw tile integration** — use the original full-resolution IGN COPC tiles (usually in a `Lidar/` folder next to the `.blend`) as the display cloud, merging lighting from the baked low-res PLY. This gives maximum point density in the viewer without processing overhead. Auto-download from IGN as fallback if tiles are not found locally.
+A non-identity `matrix_world` on the PC object (e.g. Aiguille Dibona, offset −1478, −1041, −744) is handled automatically by `extract_lights.py` and the reference PLY export.
 
 ---
 
 ## Scenes validated
 
-| Scene | Points (web) | Lights | Notes |
+| Scene | Web PLY pts | Full HD pts | Notes |
 |---|---|---|---|
-| Aiguille Dibona | 6.3M | 4× red AREA/SPOT + 2× white POINT | Ce que je cache series |
-| Chamechaude | 7.25M | moon (SUN) + spotlight | Night scene |
-| Alpe d'Huez | 9.7M | moon (SUN) + SPOT + emission curve | Lava-path bezier |
+| Chamechaude | 7.25M | 59.5M | Night scene, moonlight + spotlight. Reprojection matches render. |
+| Aiguille Dibona (Ce que je cache) | 6.3M | — | 6 lights + blue emission curve. Bake path. |
+| Alpe d'Huez | 9.7M | — | Moon + emission curve (lava path). Bake path. |
+
+---
+
+## Fallback — Python physics bake (`bake_lighting.py`)
+
+The original bake script is kept as a fallback for quick previews or scenes where orbit renders aren't available yet. It re-implements Blender's light physics (cos θ shading, terrain shadowing, emission curves with segment-distance model) with calibrated constants (K_GLOBAL=157, K_SUN=0.105, K_CURVE=0.19). It matches well but requires per-scene validation; the reprojection path is universal.
+
+```bash
+python bake_lighting.py <input.ply> <scene_lights.json> <output-lit.ply>
+```
+
+---
+
+## Roadmap
+
+- **Drag-and-drop launcher** — drop a `.blend`, the full pipeline runs automatically
+- **Orbit target empty** — `GS_TARGET` empty in .blend sets the camera orbit centre; fallback to terrain bbox centre (already implemented)
+- **Emission mesh objects** — bake light from mesh faces with Emission material
+- **COPC raw tile integration** — full pipeline validated end-to-end (in progress)

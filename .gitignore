@@ -42,3 +42,6 @@ build/
 .DS_Store
 Thumbs.db
 desktop.ini
+prototype-v2-splat/
+convert_ply_to_splat.py
+gs-capture/output/
