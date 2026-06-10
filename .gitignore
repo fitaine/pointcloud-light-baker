@@ -1,0 +1,44 @@
+# Point cloud data (large binary files)
+*.ply
+*.laz
+*.copc.laz
+*.copc
+*.splat
+
+# Rendered images
+*.png
+*.jpg
+*.jpeg
+*.exr
+*.hdr
+
+# Generated / output directories
+prototype/pointclouds/
+potree/pointclouds/
+gs-capture/output/
+outputs/
+prototype-v2-splat/splats/
+
+# Potree library archive
+potree/Potree_1.8.2.zip
+
+# Scene-specific generated files (not source)
+scene_lights.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Claude Code internal
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

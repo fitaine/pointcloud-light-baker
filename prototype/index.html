@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aiguille Dibona — Point Cloud</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #07080a; overflow: hidden; cursor: crosshair; }
+    canvas { display: block; }
+
+    #loading {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+      color: rgba(200,240,224,.45); pointer-events: none; z-index: 10;
+    }
+    #loading.hidden { display: none; }
+
+    #ui {
+      position: fixed; bottom: 24px; left: 24px;
+      display: none; flex-direction: column; gap: 10px; z-index: 10;
+      font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+      letter-spacing: .12em; color: rgba(200,240,224,.65);
+    }
+    #ui.visible { display: flex; }
+
+    .row { display: flex; align-items: center; gap: 12px; }
+    .lbl { width: 68px; text-transform: uppercase; opacity: .5; }
+    input[type=range] { width: 100px; accent-color: #c8f0e0; cursor: crosshair; }
+
+    button {
+      background: none;
+      border: 1px solid rgba(200,240,224,.18);
+      color: rgba(200,240,224,.65);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+      padding: 5px 14px; cursor: crosshair;
+      transition: border-color .15s, color .15s;
+      align-self: flex-start;
+    }
+    button:hover { border-color: rgba(200,240,224,.55); color: rgba(200,240,224,.9); }
+
+    #badge {
+      position: fixed; top: 20px; left: 24px;
+      font-family: 'IBM Plex Mono', monospace; font-size: 9px;
+      letter-spacing: .16em; text-transform: uppercase;
+      color: rgba(200,240,224,.25); pointer-events: none; z-index: 10;
+    }
+    #switch-link {
+      position: fixed; top: 36px; left: 24px;
+      font-family: 'IBM Plex Mono', monospace; font-size: 9px;
+      letter-spacing: .16em; text-transform: uppercase;
+      color: rgba(200,240,224,.55); text-decoration: none; z-index: 10;
+      border-bottom: 1px solid rgba(200,240,224,.15);
+      transition: color .15s, border-color .15s;
+    }
+    #switch-link:hover { color: rgba(200,240,224,.75); border-color: rgba(200,240,224,.4); }
+
+    #scene-nav {
+      position: fixed; top: 64px; left: 24px;
+      display: flex; flex-direction: column; gap: 2px; z-index: 10;
+    }
+    .scene-btn {
+      font-family: 'IBM Plex Mono', monospace; font-size: 9px;
+      letter-spacing: .16em; text-transform: uppercase; text-decoration: none;
+      color: rgba(200,240,224,.40); padding: 3px 0;
+      border-left: 1px solid transparent;
+      padding-left: 8px;
+      transition: color .15s, border-color .15s;
+      cursor: crosshair;
+    }
+    .scene-btn:hover  { color: rgba(200,240,224,.75); border-color: rgba(200,240,224,.35); }
+    .scene-btn.active { color: rgba(200,240,224,.85); border-color: rgba(200,240,224,.55); }
+
+    #telemetry {
+      position: fixed; bottom: 24px; right: 24px;
+      font-family: 'IBM Plex Mono', monospace; font-size: 9px;
+      letter-spacing: .10em; color: rgba(200,240,224,.28);
+      text-align: right; pointer-events: none; line-height: 1.8;
+      display: none;
+    }
+    #telemetry.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading…</div>
+  <div id="badge">v1 · Point Cloud</div>
+  <a id="switch-link" href="#">→ v2 Splat</a>
+
+  <nav id="scene-nav">
+    <a class="scene-btn" data-scene="dibona-new-lit"      href="?scene=dibona-new-lit">Aiguille Dibona</a>
+    <a class="scene-btn" data-scene="chamechaude-web-lit" href="?scene=chamechaude-web-lit">Chamechaude</a>
+    <a class="scene-btn" data-scene="alpe-web-lit"        href="?scene=alpe-web-lit">Alpe d'Huez</a>
+  </nav>
+
+  <div id="ui">
+    <div class="row">
+      <span class="lbl">Size</span>
+      <input type="range" id="size-slider" min="1" max="6" step="0.5" value="2">
+    </div>
+    <button id="color-btn">⬡ Elevation mode</button>
+    <button id="reset-btn">⊹ Reset view</button>
+  </div>
+
+  <div id="telemetry">
+    <div id="fps-line">— fps</div>
+    <div id="pts-line"></div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="main.js"></script>
+  <script>
+    document.getElementById('switch-link').href =
+      location.protocol + '//' + location.hostname + ':8002'
+
+    // Highlight the active scene in the nav
+    const currentScene = new URLSearchParams(location.search).get('scene') || 'dibona-025-lit'
+    document.querySelectorAll('.scene-btn').forEach(btn => {
+      if (btn.dataset.scene === currentScene) btn.classList.add('active')
+    })
+  </script>
+</body>
+</html>

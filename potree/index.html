@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Point Cloud — Potree</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400&display=swap" rel="stylesheet">
+
+  <!-- ── Potree 1.8.2 — exact deps from examples/copc.html ── -->
+  <link rel="stylesheet" href="Potree_1.8.2/build/potree/potree.css">
+  <link rel="stylesheet" href="Potree_1.8.2/libs/jquery-ui/jquery-ui.min.css">
+  <link rel="stylesheet" href="Potree_1.8.2/libs/openlayers3/ol.css">
+  <link rel="stylesheet" href="Potree_1.8.2/libs/spectrum/spectrum.css">
+  <link rel="stylesheet" href="Potree_1.8.2/libs/jstree/themes/mixed/style.css">
+  <script src="Potree_1.8.2/libs/jquery/jquery-3.1.1.min.js"></script>
+  <script src="Potree_1.8.2/libs/spectrum/spectrum.js"></script>
+  <script src="Potree_1.8.2/libs/jquery-ui/jquery-ui.min.js"></script>
+  <script src="Potree_1.8.2/libs/other/BinaryHeap.js"></script>
+  <script src="Potree_1.8.2/libs/tween/tween.min.js"></script>
+  <script src="Potree_1.8.2/libs/d3/d3.js"></script>
+  <script src="Potree_1.8.2/libs/proj4/proj4.js"></script>
+  <script src="Potree_1.8.2/libs/openlayers3/ol.js"></script>
+  <script src="Potree_1.8.2/libs/i18next/i18next.js"></script>
+  <script src="Potree_1.8.2/libs/jstree/jstree.js"></script>
+  <script src="Potree_1.8.2/libs/copc/index.js"></script>
+  <script src="Potree_1.8.2/build/potree/potree.js"></script>
+  <!-- NOTE: three.js is bundled inside potree.js — do NOT load separately -->
+  <!-- laslaz.js must come AFTER potree.js — needed for LAZ decompression in COPC -->
+  <script src="Potree_1.8.2/libs/plasio/js/laslaz.js"></script>
+
+  <style>
+    /* ── Reset ─────────────────────────────────────────────────────────── */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #07080a; }
+
+    /* ── Hide Potree sidebar + fix canvas ──────────────────────────────── */
+    #potree_sidebar_container         { display: none !important; }
+    .potree_container                 { background: transparent !important; }
+    #potree_render_area               { position: fixed; inset: 0; z-index: 1; }
+    #potree_render_area canvas        { cursor: crosshair !important; display: block; }
+
+    /* ── Loading ────────────────────────────────────────────────────────── */
+    #loading {
+      position: fixed; inset: 0; z-index: 200;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+      color: rgba(200,240,224,.45);
+      background: #07080a;
+      transition: opacity .6s ease;
+    }
+    #loading.fade { opacity: 0; pointer-events: none; }
+
+    /* ── Badge ──────────────────────────────────────────────────────────── */
+    #badge {
+      position: fixed; top: 20px; left: 24px; z-index: 50;
+      font-family: 'IBM Plex Mono', monospace; font-size: 9px;
+      letter-spacing: .16em; text-transform: uppercase;
+      color: rgba(200,240,224,.25); pointer-events: none;
+    }
+
+    /* ── Controls — bottom left ─────────────────────────────────────────── */
+    #ui {
+      position: fixed; bottom: 24px; left: 24px; z-index: 50;
+      display: none; flex-direction: column; gap: 10px;
+      font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+      letter-spacing: .12em; color: rgba(200,240,224,.65);
+    }
+    #ui.visible { display: flex; }
+
+    .row { display: flex; align-items: center; gap: 12px; }
+    .lbl { width: 72px; text-transform: uppercase; opacity: .5; font-size: 9px; }
+    .val { width: 24px; opacity: .6; font-size: 9px; }
+
+    input[type=range] {
+      width: 100px; accent-color: #c8f0e0; cursor: crosshair;
+      -webkit-appearance: none; height: 2px; background: rgba(200,240,224,.15);
+      border-radius: 1px; outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 10px; height: 10px;
+      background: #c8f0e0; border-radius: 50%; cursor: crosshair;
+    }
+
+    button {
+      background: none;
+      border: 1px solid rgba(200,240,224,.18);
+      color: rgba(200,240,224,.65);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+      padding: 5px 14px; cursor: crosshair; align-self: flex-start;
+      transition: border-color .15s, color .15s, background .15s;
+    }
+    button:hover {
+      border-color: rgba(200,240,224,.55);
+      color: rgba(200,240,224,.9);
+    }
+    button.active {
+      border-color: rgba(200,240,224,.45);
+      color: rgba(200,240,224,.95);
+      background: rgba(200,240,224,.06);
+    }
+
+    /* ── Telemetry — bottom right ───────────────────────────────────────── */
+    #telemetry {
+      position: fixed; bottom: 24px; right: 24px; z-index: 50;
+      display: none;
+      font-family: 'IBM Plex Mono', monospace; font-size: 9px;
+      letter-spacing: .10em; color: rgba(200,240,224,.28);
+      text-align: right; pointer-events: none; line-height: 1.9;
+    }
+    #telemetry.visible { display: block; }
+  </style>
+</head>
+<body>
+
+  <div id="loading">Loading…</div>
+  <div id="badge">Potree · Point Cloud</div>
+
+  <!-- Potree needs these two divs -->
+  <div id="potree_render_area"></div>
+  <div id="potree_sidebar_container"></div>
+
+  <!-- Custom UI overlay -->
+  <div id="ui">
+    <div class="row">
+      <span class="lbl">Size</span>
+      <input type="range" id="size-slider" min="0.5" max="5" step="0.5" value="1">
+      <span class="val" id="size-val">1</span>
+    </div>
+    <div class="row">
+      <span class="lbl">Budget</span>
+      <input type="range" id="budget-slider" min="1" max="10" step="1" value="5">
+      <span class="val" id="budget-val">5M</span>
+    </div>
+    <button id="color-btn">⬡ Elevation mode</button>
+    <button id="edl-btn">⬡ EDL depth</button>
+    <button id="reset-btn">⊹ Reset view</button>
+  </div>
+
+  <div id="telemetry">
+    <div id="fps-line">— fps</div>
+    <div id="pts-line"></div>
+    <div id="scene-line"></div>
+  </div>
+
+<script>
+// ── Scene config ────────────────────────────────────────────────────────────
+// Change SCENE_ID to switch between loaded scenes.
+// The folder must exist under ./pointclouds/<SCENE_ID>/metadata.json
+// Files: ./pointclouds/<key>.copc.laz  (generated by convert_to_copc.bat)
+const SCENES = {
+  "chamechaude-lit":  "Chamechaude",
+  "grande-motte-lit": "Grande Motte",
+  "dibona-web-lit":   "Aiguille Dibona",
+};
+
+// Pick scene from URL ?scene=chamechaude, or default to first
+const urlScene = new URLSearchParams(location.search).get("scene");
+const SCENE_ID = (urlScene && SCENES[urlScene]) ? urlScene : Object.keys(SCENES)[0];
+const SCENE_LABEL = SCENES[SCENE_ID];
+
+document.title = SCENE_LABEL + " — Point Cloud";
+document.getElementById("badge").textContent = "Potree · " + SCENE_LABEL;
+document.getElementById("scene-line").textContent = SCENE_LABEL.toUpperCase();
+
+// ── Potree viewer ────────────────────────────────────────────────────────────
+window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
+
+viewer.setEDLEnabled(false);
+viewer.setFOV(55);
+viewer.setPointBudget(5_000_000);
+viewer.setBackground("none");  // transparent — body CSS #07080a shows through
+
+// ── Color space ──────────────────────────────────────────────────────────────
+// Our baked colors are already sRGB-encoded uint8.
+// Potree's shader passes them through without transformation.
+// We want NO extra gamma at the renderer output — the browser/OS will
+// interpret the framebuffer values as sRGB natively, which is correct.
+const r = viewer.renderer;
+r.setClearColor(0x07080a, 1);
+if (typeof THREE !== "undefined") {
+  if (r.outputColorSpace !== undefined) {
+    // Three.js r152+ API
+    r.outputColorSpace = THREE.LinearSRGBColorSpace;
+  } else if (r.outputEncoding !== undefined) {
+    // Three.js r134–r151 API (what Potree 1.8.2 bundles)
+    r.outputEncoding = THREE.LinearEncoding;
+  }
+  r.toneMapping = THREE.NoToneMapping;
+}
+
+// ── Load point cloud ─────────────────────────────────────────────────────────
+let pointcloud = null;
+let useVertexColor = true;
+let edlEnabled = false;
+
+// ── Fix: CopcLoader.load is async but Potree never .catch()es it.
+//    Any error from Copc.create() (bad VLR, network, range request) silently
+//    rejects an unhandled promise — callback never fires, no console error.
+//    Patch it here to surface failures.
+if (Potree.CopcLoader) {
+  const _origCopcLoad = Potree.CopcLoader.load;
+  Potree.CopcLoader.load = async function(file, callback) {
+    try {
+      await _origCopcLoad.call(this, file, callback);
+    } catch (err) {
+      console.error("[CopcLoader] Failed to load:", file, "\n", err);
+      document.getElementById("loading").innerHTML =
+        "COPC load error<br><small style='opacity:.5;font-size:9px'>" +
+        (err && err.message ? err.message : String(err)) + "</small>";
+      callback(null);  // let the caller handle null geometry
+    }
+  };
+}
+
+// Also catch any other unhandled async rejections (fallback)
+window.addEventListener("unhandledrejection", (ev) => {
+  console.error("[unhandledrejection]", ev.reason);
+  const msg = ev.reason && ev.reason.message ? ev.reason.message : String(ev.reason);
+  const el = document.getElementById("loading");
+  if (el && el.style.display !== "none") {
+    el.innerHTML = "Error: " + msg +
+      "<br><small style='opacity:.4;font-size:9px'>open DevTools console for details</small>";
+  }
+});
+
+// URL param ?test=1 → load Potree's bundled lion sample instead (for debugging)
+const urlTest = new URLSearchParams(location.search).get("test");
+const CLOUD_URL = urlTest
+  ? "./Potree_1.8.2/pointclouds/lion_takanawa.copc.laz"
+  : `./pointclouds/${SCENE_ID}.copc.laz`;
+const CLOUD_LABEL = urlTest ? "lion (test)" : SCENE_LABEL;
+console.log("[Potree] Loading:", CLOUD_URL);
+
+Potree.loadPointCloud(
+  CLOUD_URL,
+  CLOUD_LABEL,
+  (e) => {
+    pointcloud = e.pointcloud;
+    const mat = pointcloud.material;
+
+    // --- Appearance ---
+    mat.size          = 1.0;
+    mat.pointSizeType = Potree.PointSizeType.FIXED;
+    mat.shape         = Potree.PointShape.SQUARE;
+
+    // Use baked vertex colors
+    setVertexColorMode();
+
+    viewer.scene.addPointCloud(pointcloud);
+    viewer.fitToScreen(0.6);
+
+    // Point count
+    const npts = pointcloud.numPoints || 0;
+    if (npts > 0) {
+      document.getElementById("pts-line").textContent =
+        (npts / 1e6).toFixed(1) + "M pts";
+    }
+
+    // Hide loading overlay
+    const loadEl = document.getElementById("loading");
+    loadEl.classList.add("fade");
+    setTimeout(() => { loadEl.style.display = "none"; }, 700);
+
+    document.getElementById("ui").classList.add("visible");
+    document.getElementById("telemetry").classList.add("visible");
+  }
+);
+
+// ── Color modes ──────────────────────────────────────────────────────────────
+function setVertexColorMode() {
+  if (!pointcloud) return;
+  const mat = pointcloud.material;
+  // "rgba" uses the RGB colors baked into the point cloud
+  mat.activeAttributeName = "rgba";
+}
+
+function setElevationMode() {
+  if (!pointcloud) return;
+  const mat = pointcloud.material;
+  mat.activeAttributeName = "elevation";
+
+  // Use Viridis palette matching the Three.js prototype viewer
+  // Potree gradient: array of [t, THREE.Color] pairs, t in [0..1]
+  if (Potree.Gradients && Potree.Gradients.VIRIDIS) {
+    mat.gradient = Potree.Gradients.VIRIDIS;
+  } else {
+    // Manual Viridis approximation (matches prototype/main.js shader)
+    mat.gradient = [
+      [0.000, new THREE.Color(0x440154)],
+      [0.125, new THREE.Color(0x482878)],
+      [0.250, new THREE.Color(0x3e4989)],
+      [0.375, new THREE.Color(0x31688e)],
+      [0.500, new THREE.Color(0x26828e)],
+      [0.625, new THREE.Color(0x1f9e89)],
+      [0.750, new THREE.Color(0x35b779)],
+      [0.875, new THREE.Color(0x6ece58)],
+      [1.000, new THREE.Color(0xfde725)],
+    ];
+  }
+}
+
+// ── UI controls ──────────────────────────────────────────────────────────────
+
+// Point size
+document.getElementById("size-slider").addEventListener("input", e => {
+  const v = parseFloat(e.target.value);
+  document.getElementById("size-val").textContent = v;
+  if (pointcloud) pointcloud.material.size = v;
+});
+
+// Point budget
+document.getElementById("budget-slider").addEventListener("input", e => {
+  const m = parseInt(e.target.value);
+  document.getElementById("budget-val").textContent = m + "M";
+  viewer.setPointBudget(m * 1_000_000);
+});
+
+// Color / elevation toggle
+document.getElementById("color-btn").addEventListener("click", () => {
+  useVertexColor = !useVertexColor;
+  const btn = document.getElementById("color-btn");
+  if (useVertexColor) {
+    setVertexColorMode();
+    btn.textContent = "⬡ Elevation mode";
+    btn.classList.remove("active");
+  } else {
+    setElevationMode();
+    btn.textContent = "⬡ Satellite + light";
+    btn.classList.add("active");
+  }
+});
+
+// EDL toggle
+document.getElementById("edl-btn").addEventListener("click", () => {
+  edlEnabled = !edlEnabled;
+  viewer.setEDLEnabled(edlEnabled);
+  document.getElementById("edl-btn").classList.toggle("active", edlEnabled);
+});
+
+// Reset view
+document.getElementById("reset-btn").addEventListener("click", () => {
+  viewer.fitToScreen(0.6);
+});
+
+// ── FPS counter ───────────────────────────────────────────────────────────────
+let frames = 0, fpsT = performance.now();
+const fpsEl = document.getElementById("fps-line");
+(function loop() {
+  requestAnimationFrame(loop);
+  frames++;
+  const now = performance.now();
+  if (now - fpsT >= 1000) {
+    fpsEl.textContent = frames + " fps";
+    frames = 0;
+    fpsT = now;
+  }
+})();
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+window.addEventListener("keydown", e => {
+  if (e.key === "r" || e.key === "R") viewer.fitToScreen(0.6);
+  if (e.key === "e" || e.key === "E") document.getElementById("edl-btn").click();
+  if (e.key === "c" || e.key === "C") document.getElementById("color-btn").click();
+});
+</script>
+</body>
+</html>
