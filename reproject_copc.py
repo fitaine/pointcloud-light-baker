@@ -144,6 +144,30 @@ def auto_align(capture_dir, tiles_dir):
     return np.array([tx, ty, dz], dtype=np.float64)
 
 
+UNSEEN_DIM = 0.15
+
+
+class OrthoSampler:
+    """Nearest-pixel RGB from a GeoTIFF, georef read from the TIFF tags
+    (ModelPixelScale 33550 + ModelTiepoint 33922) — no GDAL dependency."""
+
+    def __init__(self, path):
+        img = Image.open(path)
+        scale = img.tag_v2[33550]      # (sx, sy, sz)
+        tie = img.tag_v2[33922]        # (i, j, k, X, Y, Z) — pixel 0,0 → X,Y
+        self.px, self.py = float(scale[0]), float(scale[1])
+        self.x0, self.y0 = float(tie[3]), float(tie[4])
+        self.img = np.asarray(img.convert('RGB'))
+        log(f"ortho {self.img.shape[1]}x{self.img.shape[0]} @ {self.px:g} m/px "
+            f"origin ({self.x0:.0f}, {self.y0:.0f})")
+
+    def sample(self, xy_lambert):
+        H, W = self.img.shape[:2]
+        col = np.clip(((xy_lambert[:, 0] - self.x0) / self.px).astype(np.int32), 0, W-1)
+        row = np.clip(((self.y0 - xy_lambert[:, 1]) / self.py).astype(np.int32), 0, H-1)
+        return self.img[row, col]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('reference_ply')
@@ -152,6 +176,9 @@ def main():
     ap.add_argument('out_dir')
     ap.add_argument('--origin', default=None,
                     help='Override X,Y,Z lambert→blend offset (skips auto-align)')
+    ap.add_argument('--raster', default=None,
+                    help='BDORTHO GeoTIFF — unseen points get dimmed satellite '
+                         'albedo (x0.15) instead of black')
     args = ap.parse_args()
 
     if args.origin:
@@ -160,6 +187,10 @@ def main():
     else:
         origin = auto_align(args.capture_dir, args.tiles_dir)
     os.makedirs(args.out_dir, exist_ok=True)
+    ortho = OrthoSampler(args.raster) if args.raster else None
+    if ortho is None:
+        print("WARNING: no --raster — unseen points will be black. "
+              "Pass the BDORTHO GeoTIFF for a dimmed-albedo fallback.")
 
     with open(os.path.join(args.capture_dir, 'transforms.json')) as f:
         tr = json.load(f)
@@ -274,7 +305,11 @@ def main():
         seen = cnt > 0
         rgb = np.zeros((n, 3), dtype=np.uint16)
         rgb[seen] = (col_sum[seen] / cnt[seen, None]).astype(np.uint16) * 257  # 8→16 bit
-        log(f"coverage {seen.sum()/n*100:.2f}%")
+        if ortho is not None and (~seen).any():
+            alb = ortho.sample(xyz[~seen][:, :2] + origin[:2])   # back to lambert
+            rgb[~seen] = (alb.astype(np.float32) * UNSEEN_DIM).astype(np.uint16) * 257
+        log(f"coverage {seen.sum()/n*100:.2f}%"
+            + ("" if ortho is None else f"  (unseen → dimmed albedo)"))
         grand_total += n
         grand_seen += int(seen.sum())
 
@@ -285,7 +320,12 @@ def main():
         out = laspy.LasData(header)
         out.x, out.y, out.z = las.x, las.y, las.z
         out.red, out.green, out.blue = rgb[:, 0], rgb[:, 1], rgb[:, 2]
-        out.write(out_path)
+        # write to a temp name then rename — a killed run never leaves a
+        # corrupt half-written tile that the resume skip would silently
+        # accept (keep .laz extension: laspy infers compression from it)
+        tmp_path = out_path[:-4] + '_tmp.laz'
+        out.write(tmp_path)
+        os.replace(tmp_path, out_path)
         log(f"wrote {out_path}")
         del las, xyz, col_sum, cnt, out
 

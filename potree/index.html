@@ -266,7 +266,7 @@ window.addEventListener("unhandledrejection", (ev) => {
 const urlTest = new URLSearchParams(location.search).get("test");
 // Cache-buster: bump when a .copc.laz is rebuilt under the same name —
 // Chrome caches range-request chunks even across hard refreshes.
-const CLOUD_VERSION = "2";
+const CLOUD_VERSION = "3";
 const CLOUD_URL = urlTest
   ? "./Potree_1.8.2/pointclouds/lion_takanawa.copc.laz"
   : `./pointclouds/${SCENE_ID}.copc.laz?v=${CLOUD_VERSION}`;

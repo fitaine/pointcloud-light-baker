@@ -18,6 +18,28 @@ Because the colors come from real Cycles renders, **any light type, material, or
 
 ---
 
+## Quick start — one drop
+
+Drag a `.blend` onto **`RUN PIPELINE.bat`**. It runs the whole chain and prints progress in the terminal:
+
+1. **Render** — 146 orbit frames + cameras + cloud DEM (Blender, background)
+2. **Reproject** — auto frame alignment, color the raw IGN tiles, satellite fallback
+3. **Merge** — untwine → single `<scene>.copc.laz`
+4. **Register** — scene added to the Potree viewer menu, cache version bumped
+
+**Every stage is resumable**: close the window or kill the process at any point, drop the same `.blend` again, and it continues — finished frames and tiles are skipped, half-written files are never trusted (temp-write + rename).
+
+Scene folder conventions (same as `lidar_pipeline.py`):
+
+```
+<blend_dir>/LIDAR/LIDAR Bases IGN/     raw IGN .copc.laz tiles
+<blend_dir>/LIDAR/output/*_raster.tif  BDORTHO ortho (albedo fallback)
+```
+
+The sections below document each stage individually.
+
+---
+
 ## Pipeline
 
 ```

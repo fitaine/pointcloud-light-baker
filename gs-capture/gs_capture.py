@@ -189,14 +189,17 @@ frames_data = []
 _scene_cam  = scene.camera
 
 if _scene_cam is not None:
-    print(f"\n[GS Capture] Frame 0 — scene camera '{_scene_cam.name}' …")
-    bpy.context.scene.frame_set(bpy.context.scene.frame_current)
     _val_path = os.path.join(images_dir, "cam_scene.webp")
-    scene.render.filepath = _val_path
-    bpy.ops.render.render(write_still=True)
+    if os.path.exists(_val_path):
+        print(f"\n[GS Capture] Frame 0 — cam_scene.webp exists, skipping (resume)")
+    else:
+        print(f"\n[GS Capture] Frame 0 — scene camera '{_scene_cam.name}' …")
+        bpy.context.scene.frame_set(bpy.context.scene.frame_current)
+        scene.render.filepath = _val_path
+        bpy.ops.render.render(write_still=True)
+        print(f"[GS Capture] ✓ cam_scene.webp  ← open this to verify rendering\n")
     _c2w = [list(row) for row in _scene_cam.matrix_world]
     frames_data.append({"file_path": "images/cam_scene.webp", "transform_matrix": _c2w})
-    print(f"[GS Capture] ✓ cam_scene.webp  ← open this to verify rendering\n")
 else:
     print("[GS Capture] No scene camera in .blend — skipping validation frame.\n")
 
@@ -256,9 +259,15 @@ for idx, (elev, azimuth, name) in enumerate(camera_specs):
     # frame_set() forces a full depsgraph update including Geometry Nodes.
     bpy.context.scene.frame_set(bpy.context.scene.frame_current)
 
-    filepath              = os.path.join(images_dir, f"{name}.webp")
-    scene.render.filepath = filepath
-    bpy.ops.render.render(write_still=True)
+    # Camera transforms are deterministic (computed from constants), so a
+    # frame already on disk can be skipped on relaunch — render resume.
+    filepath = os.path.join(images_dir, f"{name}.webp")
+    if os.path.exists(filepath):
+        print(f"[GS Capture] {idx+1:3d}/{total}  {name}  exists, skipping (resume)")
+    else:
+        scene.render.filepath = filepath
+        bpy.ops.render.render(write_still=True)
+        print(f"[GS Capture] {idx+1:3d}/{total}  {name}  ({x:.0f}, {y:.0f}, {z:.0f})")
 
     # Camera-to-world matrix — Blender convention (X-right, Y-up, -Z fwd)
     # matches NeRF/Nerfstudio "blender" convention directly.
@@ -267,8 +276,6 @@ for idx, (elev, azimuth, name) in enumerate(camera_specs):
         "file_path":        f"images/{name}.webp",
         "transform_matrix": c2w,
     })
-
-    print(f"[GS Capture] {idx+1:3d}/{total}  {name}  ({x:.0f}, {y:.0f}, {z:.0f})")
 
 # ── Save FOV before removing camera ──────────────────────────────────────────
 # Must be before bpy.data.cameras.remove() — reading cam_data after removal crashes.
