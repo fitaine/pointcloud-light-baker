@@ -158,7 +158,11 @@ python bake_lighting.py <input.ply> <scene_lights.json> <output-lit.ply>
 
 ## Roadmap
 
+### Pipeline
 - **Drag-and-drop launcher** — drop a `.blend`, the full pipeline runs automatically
-- **Orbit target empty** — `GS_TARGET` empty in .blend sets the camera orbit centre; fallback to terrain bbox centre (already implemented)
-- **Emission mesh objects** — bake light from mesh faces with Emission material
+- **Emission mesh objects** — reproject light from mesh faces with Emission material (currently only bezier curves handled by bake fallback)
 - **COPC raw tile integration** — full pipeline validated end-to-end (in progress)
+
+### Display
+- **Circular tile clipping** — for scenes centered on a summit or island, clip the point cloud to a circle rather than a rectangle. Logic: read the `GS_TARGET` empty position, find the closest border of the combined tile bounding box, use that distance as radius, delete all points whose XY distance from the target exceeds it. Opt-in only — not suitable for scenes where the point of interest is near a tile edge.
+- **Volumetric display** — some scenes use Blender volumes to shape spotlight beams or add fog. These are invisible to the reprojection (no geometry to project onto). Plan: export the volume as OpenVDB from Blender, convert to NanoVDB / 3D texture, composite as a ray-march shader in Three.js over the Potree point cloud. First test scene: Aiguille Dibona (Ce que je cache) which has spotlight beam volumes.
