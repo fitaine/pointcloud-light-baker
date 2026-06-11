@@ -189,5 +189,6 @@ python bake_lighting.py <input.ply> <scene_lights.json> <output-lit.ply>
 - **COPC raw tile integration** — full pipeline validated end-to-end (in progress)
 
 ### Display
+- **Default view = 2D render framing** — open the viewer on the exact framing of the hero render: initialize the Potree camera from the scene camera exported in `transforms.json` (`cam_scene` position, orientation and FOV), converted to the cloud's frame with the auto-align offset, instead of the generic `fitToScreen`.
 - **Circular tile clipping** — for scenes centered on a summit or island, clip the point cloud to a circle rather than a rectangle. Logic: read the `GS_TARGET` empty position, find the closest border of the combined tile bounding box, use that distance as radius, delete all points whose XY distance from the target exceeds it. Opt-in only — not suitable for scenes where the point of interest is near a tile edge.
 - **Volumetric display** — some scenes use Blender volumes to shape spotlight beams or add fog. These are invisible to the reprojection (no geometry to project onto). Plan: export the volume as OpenVDB from Blender, convert to NanoVDB / 3D texture, composite as a ray-march shader in Three.js over the Potree point cloud. First test scene: Aiguille Dibona (Ce que je cache) which has spotlight beam volumes.
