@@ -36,6 +36,8 @@ import subprocess
 import sys
 
 HERE        = os.path.dirname(os.path.abspath(__file__))
+LIDAR_PROJ  = r"C:\Users\Tiphaine\Pictures\3D\LIDAR PROJECT"   # lidar_pipeline.py
+NATIVE_RES  = 0.20   # IGN BDORTHO native m/px — rasters coarser than this are re-fetched
 BLENDER     = r"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe"
 QGIS_BIN    = r"C:\Program Files\QGIS 3.40.5\bin"
 UNTWINE     = r"C:\Program Files\QGIS 3.40.5\apps\qgis-ltr\untwine.exe"
@@ -44,6 +46,55 @@ REPROJECT   = os.path.join(HERE, "reproject_copc.py")
 RELIGHT     = os.path.join(HERE, "albedo_relight.py")
 POTREE_HTML = os.path.join(HERE, "potree", "index.html")
 N_FRAMES    = 146   # 4 rings x 36 + top + scene cam — keep in sync w/ gs_capture
+
+
+def raster_res(path):
+    """Pixel size in metres from the GeoTIFF tags (no GDAL needed)."""
+    from PIL import Image
+    try:
+        return float(Image.open(path).tag_v2[33550][0])
+    except Exception:
+        return None
+
+
+def ensure_native_raster(lit_dir, blend_dir, slug, current):
+    """Never trust the raster in the folder — measure it. If it's missing or
+    coarser than NATIVE_RES, fetch the IGN BDORTHO at native resolution over
+    the exact extent of the lit tiles. Returns the raster path to use."""
+    res = raster_res(current) if current else None
+    if res is not None and res <= NATIVE_RES + 0.01:
+        print(f"  raster ok: {os.path.basename(current)} @ {res:g} m/px")
+        return current
+    if res is not None:
+        print(f"  raster {os.path.basename(current)} is {res:g} m/px — "
+              f"fetching native {NATIVE_RES} m/px from IGN")
+    else:
+        print(f"  no raster — fetching native {NATIVE_RES} m/px from IGN")
+
+    import laspy
+    import math
+    x0 = y0 = float("inf")
+    x1 = y1 = float("-inf")
+    for f in glob.glob(os.path.join(lit_dir, "*_lit.laz")):
+        h = laspy.open(f).header
+        x0, x1 = min(x0, h.x_min), max(x1, h.x_max)
+        y0, y1 = min(y0, h.y_min), max(y1, h.y_max)
+    x0, y0 = math.floor(x0), math.floor(y0)
+    x1, y1 = math.ceil(x1), math.ceil(y1)
+
+    out = os.path.join(blend_dir, "LIDAR", "output",
+                       f"{slug}-ortho-020_raster.tif")
+    sys.path.insert(0, LIDAR_PROJ)
+    from lidar_pipeline import fetch_raster_tiled
+    try:
+        fetch_raster_tiled(x0, y0, x1, y1, NATIVE_RES,
+                           "ORTHOIMAGERY.ORTHOPHOTOS", out)
+    except Exception as exc:
+        if current:
+            print(f"  WMS fetch failed ({exc}) — falling back to {current}")
+            return current
+        die(f"ortho fetch failed and no fallback raster: {exc}")
+    return out
 
 
 def banner(stage, msg):
@@ -117,8 +168,9 @@ def main():
     # from renders). The plain reprojection is a diagnostic — what Cycles
     # actually saw — published only with --both.
     variants = []
+    banner("2b", "relight — albedo x light separation")
+    raster = ensure_native_raster(lit_dir, blend_dir, slug, raster)
     if raster:
-        banner("2b", "relight — albedo x light separation")
         r = subprocess.run([sys.executable, RELIGHT, lit_dir, raster, lit2_dir,
                             "--capture", capture])
         if r.returncode != 0:
@@ -130,7 +182,7 @@ def main():
         if both:
             variants.append((lit_dir, copc_out, slug, scene_name))
     else:
-        banner("2b", "relight — no raster, publishing plain reprojection")
+        print("  no raster available — publishing plain reprojection only")
         variants.append((lit_dir, copc_out, slug, scene_name))
 
     # ── Stage 3 — merge to COPC (both variants) ──────────────────────────────
