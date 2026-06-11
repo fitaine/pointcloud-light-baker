@@ -65,7 +65,12 @@ scene.render.resolution_percentage      = 100
 scene.render.image_settings.file_format = RENDER_FORMAT
 scene.render.image_settings.quality     = RENDER_QUALITY
 scene.cycles.samples                    = RENDER_SAMPLES
-scene.cycles.use_denoising              = True
+scene.cycles.use_denoising              = False  # temporarily off (user request) — re-enable if 32-sample noise shows in the bake
+# Bypass the compositor: scenes carry node setups (glare, denoise, grades)
+# tuned for the 2D hero renders. Orbit frames are raw Cycles output so those
+# nodes can stay untouched in the .blend. Runtime-only — the file is not saved.
+scene.render.use_compositing            = False
+scene.render.use_sequencer              = False
 # Color management left as-is: Filmic/AgX + artist exposure baked into renders.
 
 # ── Force full depsgraph evaluation ──────────────────────────────────────────
