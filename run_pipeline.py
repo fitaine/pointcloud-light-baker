@@ -21,7 +21,11 @@ Scene folder conventions (same as lidar_pipeline.py):
   <blend_dir>/LIDAR/output/*_raster.tif BDORTHO ortho (albedo fallback)
 
 Usage:
-  python run_pipeline.py <scene.blend>
+  python run_pipeline.py <scene.blend> [--both]
+
+  --both  also merge/register the plain reprojection cloud (diagnostic:
+          shows exactly what the Cycles renders saw, no ortho texture).
+          By default only <scene>-detail is published when a raster exists.
 """
 
 import glob
@@ -53,7 +57,8 @@ def die(msg):
 
 def main():
     if len(sys.argv) < 2 or not sys.argv[1].lower().endswith(".blend"):
-        die("usage: python run_pipeline.py <scene.blend>")
+        die("usage: python run_pipeline.py <scene.blend> [--both]")
+    both = "--both" in sys.argv[2:]
     blend = os.path.abspath(sys.argv[1])
     if not os.path.exists(blend):
         die(f"not found: {blend}")
@@ -108,7 +113,10 @@ def main():
         die("reprojection failed — relaunch to resume from the last tile")
 
     # ── Stage 2b — albedo x light relight ────────────────────────────────────
-    variants = [(lit_dir, copc_out, slug, scene_name)]
+    # Default: publish only the detail variant (texture from ortho, lighting
+    # from renders). The plain reprojection is a diagnostic — what Cycles
+    # actually saw — published only with --both.
+    variants = []
     if raster:
         banner("2b", "relight — albedo x light separation")
         r = subprocess.run([sys.executable, RELIGHT, lit_dir, raster, lit2_dir,
@@ -119,8 +127,11 @@ def main():
                                   f"{slug}-detail.copc.laz")
         variants.append((lit2_dir, detail_out, f"{slug}-detail",
                          f"{scene_name} · Detail"))
+        if both:
+            variants.append((lit_dir, copc_out, slug, scene_name))
     else:
-        banner("2b", "relight — no raster, skipping")
+        banner("2b", "relight — no raster, publishing plain reprojection")
+        variants.append((lit_dir, copc_out, slug, scene_name))
 
     # ── Stage 3 — merge to COPC (both variants) ──────────────────────────────
     rebuilt = False
@@ -178,7 +189,7 @@ def main():
 
     print(f"\n{'━'*64}")
     print(f"  DONE — start the viewer (potree/START VIEWER.bat) and open:")
-    print(f"  http://localhost:8081/?scene={slug}")
+    print(f"  http://localhost:8081/?scene={variants[0][2]}")
     print(f"{'━'*64}\n")
 
 
