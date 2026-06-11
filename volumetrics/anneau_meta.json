@@ -1,0 +1,1 @@
+{"min": [-1739.1, -2053.9, 235.8], "max": [222.2, -75.39999999999998, 1158.6], "shape": [224, 224, 96], "frame": "blend-world", "shader": {"color": [0.869, 0.869, 0.869], "density_input": 0.3, "anisotropy": -0.309}, "displace": {"strength": 200.0, "mid_level": [0, 0, 0.5], "texture": "Clouds/BLENDER_ORIGINAL hard, scale 100, depth 10"}}
