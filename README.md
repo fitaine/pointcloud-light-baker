@@ -76,14 +76,14 @@ Run via `gs-capture/launcher.bat` — drag your `.blend` onto it, or run from co
 blender --background scene.blend --python gs_capture.py -- <output_dir> <scene_name>
 ```
 
-Renders 146 frames (square 4K, 32 samples, WebP) and writes `transforms.json` with exact camera matrices plus `cloud_dem.npy` for automatic frame alignment. Timing: ~1–2 min/frame → ~3–4 h total. Per-frame resume: already-rendered frames are skipped on relaunch.
+Renders 146 frames (square 4K, 128 samples, WebP) and writes `transforms.json` with exact camera matrices plus `cloud_dem.npy` for automatic frame alignment. Timing: ~1–2 min/frame → ~3–4 h total. Per-frame resume: already-rendered frames are skipped on relaunch.
 
 **Tunable constants** (top of `gs_capture.py`, no .blend modification needed):
 
 | Constant | Default | Notes |
 |---|---|---|
 | `RENDER_WIDTH/HEIGHT` | 4096 × 4096 | square — orbits have no preferred orientation |
-| `RENDER_SAMPLES` | 32 | multi-view averaging acts as a second denoiser |
+| `RENDER_SAMPLES` | 128 | renders are fast without denoising; multi-view averaging adds more |
 | `RENDER_FORMAT` | WEBP | smaller than JPEG, visually lossless |
 | `ELEVATIONS` | [8, 20, 45, 70] | rings in degrees — 8° catches low cliff faces |
 | `STEPS_PER_RING` | 36 | cameras per ring (every 10°) |
