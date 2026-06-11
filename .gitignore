@@ -48,3 +48,5 @@ gs-capture/output/
 potree/Potree_1.8.2/
 spot_test/*.laz
 spot_test/*.npy
+volumetrics/*.npy
+volumetrics/_check_*.png
