@@ -321,8 +321,22 @@ print("[GS Capture] Temporary camera removed — .blend unmodified")
 # (camera_angle_x kept for compatibility with instant-ngp / other tools)
 fl_x = 0.5 * RENDER_WIDTH / math.tan(0.5 * camera_angle_x)
 
+# Scene camera (the 2D hero framing) exported separately — NOT a reprojection
+# frame (different lens), but used by the viewer as the per-scene default view.
+scene_camera = None
+if _scene_cam is not None and _scene_cam.data is not None:
+    scene_camera = {
+        "transform_matrix": [list(row) for row in _scene_cam.matrix_world],
+        "lens": _scene_cam.data.lens,
+        "sensor_width": _scene_cam.data.sensor_width,
+        "sensor_fit": _scene_cam.data.sensor_fit,
+        "res_x": bpy.context.scene.render.resolution_x,
+        "res_y": bpy.context.scene.render.resolution_y,
+    }
+
 transforms = {
     "camera_angle_x": camera_angle_x,
+    "scene_camera": scene_camera,
     "fl_x":   fl_x,
     "fl_y":   fl_x,          # square pixels
     "cx":     RENDER_WIDTH  / 2.0,

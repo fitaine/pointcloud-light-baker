@@ -148,6 +148,10 @@ def auto_align(capture_dir, tiles_dir):
     # subset of what sits in the tiles folder)
     extent = (bmn[0] + tx, bmn[1] + ty,
               bmn[0] + bW * cell + tx, bmn[1] + bH * cell + ty)
+    # persist for downstream consumers (viewer default-view registration)
+    with open(os.path.join(capture_dir, 'alignment.json'), 'w') as f:
+        json.dump({'blend_to_lambert': [float(tx), float(ty), float(dz)],
+                   'residual_m': float(err)}, f)
     return np.array([tx, ty, dz], dtype=np.float64), extent
 
 

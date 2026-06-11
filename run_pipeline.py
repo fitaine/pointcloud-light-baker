@@ -98,6 +98,48 @@ def ensure_native_raster(lit_dir, blend_dir, slug, current):
     return out
 
 
+def compute_scene_view(capture):
+    """Per-scene default view = the .blend scene camera's framing, converted
+    to cloud (Lambert-93) coordinates with the measured alignment offset.
+    Returns {position, target, fov} or None if the capture predates the
+    scene_camera/alignment exports."""
+    import math
+    tj_path = os.path.join(capture, "transforms.json")
+    al_path = os.path.join(capture, "alignment.json")
+    if not (os.path.exists(tj_path) and os.path.exists(al_path)):
+        return None
+    with open(tj_path) as f:
+        sc = json.load(f).get("scene_camera")
+    if not sc:
+        return None
+    with open(al_path) as f:
+        off = json.load(f)["blend_to_lambert"]
+    M = sc["transform_matrix"]
+    pos = [M[0][3] + off[0], M[1][3] + off[1], M[2][3] + off[2]]
+    fwd = [-M[0][2], -M[1][2], -M[2][2]]          # camera -Z in world
+    # aim point: along the view axis, at the distance of the cloud centre
+    dist = 1500.0
+    meta_path = os.path.join(capture, "cloud_dem_meta.json")
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            meta = json.load(f)
+        cx = meta["min_xy"][0] + meta["shape"][0] * meta["cell"] / 2 + off[0]
+        cy = meta["min_xy"][1] + meta["shape"][1] * meta["cell"] / 2 + off[1]
+        d = (cx - pos[0]) * fwd[0] + (cy - pos[1]) * fwd[1]
+        dist = max(200.0, d)
+    target = [pos[i] + fwd[i] * dist for i in range(3)]
+    # vertical FOV (three.js convention) from lens/sensor/render aspect
+    sw, lens = sc["sensor_width"], sc["lens"]
+    rx, ry = sc["res_x"], sc["res_y"]
+    if sc.get("sensor_fit") == "VERTICAL" or (sc.get("sensor_fit") == "AUTO" and ry > rx):
+        vfov = 2 * math.atan(sw / (2 * lens))
+    else:
+        vfov = 2 * math.atan((sw * ry / rx) / (2 * lens))
+    return {"position": [round(v, 2) for v in pos],
+            "target": [round(v, 2) for v in target],
+            "fov": round(math.degrees(vfov), 2)}
+
+
 def banner(stage, msg):
     print(f"\n{'━'*64}\n  STAGE {stage} — {msg}\n{'━'*64}", flush=True)
 
@@ -221,12 +263,15 @@ def main():
     with open(POTREE_HTML, encoding="utf-8") as f:
         html = f.read()
     changed = False
+    view = compute_scene_view(capture)
     for _, _, scene_id, label in variants:
         if f'"{scene_id}"' not in html:
+            entry = json.dumps({"label": label, "view": view}) if view else f'"{label}"'
             html = html.replace("const SCENES = {",
-                                f'const SCENES = {{\n  "{scene_id}": "{label}",', 1)
+                                f'const SCENES = {{\n  "{scene_id}": {entry},', 1)
             changed = True
-            print(f"  added scene '{scene_id}' to SCENES")
+            print(f"  added scene '{scene_id}' to SCENES"
+                  + (" (with 2D-render default view)" if view else ""))
     if rebuilt:
         m = re.search(r'const CLOUD_VERSION = "(\d+)"', html)
         if m:
