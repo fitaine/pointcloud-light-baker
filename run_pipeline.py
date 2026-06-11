@@ -51,6 +51,7 @@ N_FRAMES    = 146   # 4 rings x 36 + top + scene cam — keep in sync w/ gs_capt
 def raster_res(path):
     """Pixel size in metres from the GeoTIFF tags (no GDAL needed)."""
     from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None   # native orthos exceed the bomb guard
     try:
         return float(Image.open(path).tag_v2[33550][0])
     except Exception:

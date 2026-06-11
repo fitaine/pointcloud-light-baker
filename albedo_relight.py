@@ -35,6 +35,8 @@ import laspy
 from PIL import Image
 from scipy.ndimage import gaussian_filter
 
+Image.MAX_IMAGE_PIXELS = None   # native 0.20m orthos exceed PIL's bomb guard
+
 
 def auto_blur(capture_dir):
     """Render ground resolution from the capture's own cameras.

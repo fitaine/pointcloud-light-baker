@@ -31,6 +31,8 @@ import numpy as np
 import laspy
 from PIL import Image
 
+Image.MAX_IMAGE_PIXELS = None   # native 0.20m orthos exceed PIL's bomb guard
+
 DEPTH_TOL_ABS = 2.0
 DEPTH_TOL_REL = 0.005
 ZBUF_DOWNSCALE = 2
