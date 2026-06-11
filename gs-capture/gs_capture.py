@@ -44,7 +44,8 @@ RENDER_QUALITY   = 90           # WEBP/JPEG quality (90 is visually lossless)
 
 ELEVATIONS       = [8, 20, 45, 70]  # degrees above horizon — low ring catches cliff faces
 STEPS_PER_RING   = 36            # cameras per ring (every 10°)
-TARGET_NAME      = "GS_TARGET"  # exact name of the orbit-centre Empty in .blend
+TARGET_NAME      = "OrbitTarget"  # name of the orbit-centre Empty in .blend
+TARGET_LEGACY    = "GS_TARGET"    # older scenes may still use this name
 
 # Orbit camera intrinsics are FIXED — never copied from the scene camera.
 # The artistic camera's lens is irrelevant to the orbit's job (coverage):
@@ -116,13 +117,13 @@ else:
           "(reprojection will need a manual origin)")
 
 # ── Resolve orbit target ─────────────────────────────────────────────────────
-# Preferred : Empty named exactly GS_TARGET in the .blend.
+# Preferred : Empty named OrbitTarget (or legacy GS_TARGET) in the .blend.
 # Fallback  : bounding-box centre of renderable meshes.
 # NOT falling back to arbitrary empties — they are often light/camera aim helpers.
-target_obj = bpy.data.objects.get(TARGET_NAME)
+target_obj = bpy.data.objects.get(TARGET_NAME) or bpy.data.objects.get(TARGET_LEGACY)
 if target_obj is not None:
     target = target_obj.location.copy()
-    print(f"[GS Capture] GS_TARGET : {target.x:.1f}, {target.y:.1f}, {target.z:.1f}")
+    print(f"[GS Capture] {target_obj.name} : {target.x:.1f}, {target.y:.1f}, {target.z:.1f}")
 else:
     print(f"\n[GS Capture] WARNING: No object named '{TARGET_NAME}' found.")
     print(f"[GS Capture] Computing orbit centre from mesh bounding box …")
