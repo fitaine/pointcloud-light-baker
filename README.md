@@ -189,6 +189,9 @@ python bake_lighting.py <input.ply> <scene_lights.json> <output-lit.ply>
 - **Emission mesh objects** — reproject light from mesh faces with Emission material (currently only bezier curves handled by bake fallback)
 - **COPC raw tile integration** — full pipeline validated end-to-end (in progress)
 
+### Pipeline (continued)
+- **Windowed relight for huge orthos** — `albedo_relight.py` loads the full raster (×2) in RAM; fine to ~15000² px, but a 10 km scene at 0.20 m/px (50000²) would need ~60 GB. Fix when needed: process the ortho in crops per LiDAR tile. PDAL colorization is unaffected (GDAL streams blocks).
+
 ### Display
 - **Default view = 2D render framing** — open the viewer on the exact framing of the hero render: initialize the Potree camera from the scene camera exported in `transforms.json` (`cam_scene` position, orientation and FOV), converted to the cloud's frame with the auto-align offset, instead of the generic `fitToScreen`.
 - **Circular tile clipping** — for scenes centered on a summit or island, clip the point cloud to a circle rather than a rectangle. Logic: read the `GS_TARGET` empty position, find the closest border of the combined tile bounding box, use that distance as radius, delete all points whose XY distance from the target exceeds it. Opt-in only — not suitable for scenes where the point of interest is near a tile edge.
