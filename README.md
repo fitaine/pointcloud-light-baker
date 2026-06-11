@@ -23,9 +23,10 @@ Because the colors come from real Cycles renders, **any light type, material, or
 Drag a `.blend` onto **`RUN PIPELINE.bat`**. It runs the whole chain and prints progress in the terminal:
 
 1. **Render** — 146 orbit frames + cameras + cloud DEM (Blender, background)
-2. **Reproject** — auto frame alignment, color the raw IGN tiles, satellite fallback
-3. **Merge** — untwine → single `<scene>.copc.laz`
-4. **Register** — scene added to the Potree viewer menu, cache version bumped
+2. **Reproject** — auto frame alignment, tile selection by blend footprint, color the raw IGN tiles, satellite fallback
+3. **Relight** — albedo × light separation (texture from the 0.20 m ortho, lighting from the renders); the ortho resolution is verified and re-fetched at IGN native automatically
+4. **Merge** — untwine → `<scene>-detail.copc.laz` (add `--both` for the plain reprojection too)
+5. **Register** — scene added to the Potree viewer menu, cache version bumped
 
 **Every stage is resumable**: close the window or kill the process at any point, drop the same `.blend` again, and it continues — finished frames and tiles are skipped, half-written files are never trusted (temp-write + rename).
 
@@ -75,18 +76,21 @@ Run via `gs-capture/launcher.bat` — drag your `.blend` onto it, or run from co
 blender --background scene.blend --python gs_capture.py -- <output_dir> <scene_name>
 ```
 
-Renders 146 frames (4K, 64 samples + denoising, WebP) and writes `transforms.json` with exact camera matrices. Timing: ~50 s/frame → ~2 h total.
+Renders 146 frames (square 4K, 32 samples, WebP) and writes `transforms.json` with exact camera matrices plus `cloud_dem.npy` for automatic frame alignment. Timing: ~1–2 min/frame → ~3–4 h total. Per-frame resume: already-rendered frames are skipped on relaunch.
 
 **Tunable constants** (top of `gs_capture.py`, no .blend modification needed):
 
 | Constant | Default | Notes |
 |---|---|---|
-| `RENDER_WIDTH/HEIGHT` | 3840 × 2160 | 4K — higher = sharper point colors |
-| `RENDER_SAMPLES` | 64 | + denoising, enough for reprojection |
-| `RENDER_FORMAT` | WEBP | smaller than JPEG, lossless quality |
+| `RENDER_WIDTH/HEIGHT` | 4096 × 4096 | square — orbits have no preferred orientation |
+| `RENDER_SAMPLES` | 32 | multi-view averaging acts as a second denoiser |
+| `RENDER_FORMAT` | WEBP | smaller than JPEG, visually lossless |
 | `ELEVATIONS` | [8, 20, 45, 70] | rings in degrees — 8° catches low cliff faces |
 | `STEPS_PER_RING` | 36 | cameras per ring (every 10°) |
-| `TARGET_NAME` | `GS_TARGET` | name an Empty in the .blend to control orbit centre |
+| `ORBIT_LENS / ORBIT_SENSOR` | 35 / 36 mm | fixed — never copied from the scene camera; radius = (diag/2)/sin(FOV/2) × 1.1 |
+| `TARGET_NAME` | `OrbitTarget` | Empty controlling orbit centre (legacy `GS_TARGET` accepted) |
+
+The compositor is bypassed at render time (glare/denoise/grade nodes stay untouched for the 2D renders); colour management still applies.
 
 ---
 
@@ -126,12 +130,10 @@ Phase B colors each tile — ~15 min per tile.
 ## Step 3 — Convert to COPC for Potree
 
 ```bat
-REM Merge all lit tiles then convert
-pdal merge tiles\*_lit.laz merged.laz
-convert_to_copc.bat merged.laz chamechaude-full
+untwine -i <lit_tiles_dir> -o potree\pointclouds\<name>.copc.laz
 ```
 
-Uses PDAL bundled with QGIS. Output: `potree/pointclouds/<name>.copc.laz`.
+untwine (bundled with QGIS) processes tile-by-tile on disk (~200 MB RAM at any scale). PDAL `writers.copc` loads everything in RAM — fine to ~50M pts, fails at 433M. `run_pipeline.py` does this automatically with a merge manifest (a changed tile set always triggers a remerge).
 
 ---
 
