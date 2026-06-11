@@ -184,6 +184,37 @@ def export_volume(obj):
     bpy.data.node_groups.remove(ng)
 
 
+def export_lights():
+    """Scene lights for the volume lighting bake — generic, any .blend."""
+    from mathutils import Vector
+    lights = []
+    for o in bpy.context.scene.objects:
+        if o.type != 'LIGHT' or o.hide_render:
+            continue
+        L = o.data
+        d = {'name': o.name, 'type': L.type, 'energy': L.energy,
+             'color': list(L.color),
+             'location': list(o.matrix_world.translation)}
+        if L.type in ('SPOT', 'SUN', 'AREA'):
+            d['direction'] = list(o.matrix_world.to_3x3() @ Vector((0, 0, -1)))
+        if L.type == 'SPOT':
+            d['spot_size'], d['spot_blend'] = L.spot_size, L.spot_blend
+        lights.append(d)
+    w = bpy.context.scene.world
+    if w and w.node_tree:
+        bg = next((n for n in w.node_tree.nodes if n.type == 'BACKGROUND'), None)
+        if bg:
+            lights.append({'name': '__world__', 'type': 'WORLD',
+                           'color': list(bg.inputs['Color'].default_value)[:3],
+                           'energy': bg.inputs['Strength'].default_value})
+    path = os.path.join(OUT_DIR, 'scene_lights.json')
+    with open(path, 'w') as f:
+        json.dump(lights, f, indent=1)
+    print(f"[VolExport] {len(lights)} lights → {path}")
+
+
+export_lights()
+
 targets = [o for o in bpy.context.scene.objects
            if o.type == 'VOLUME' and (ONLY is None or o.name == ONLY)]
 if not targets:
