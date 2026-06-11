@@ -184,6 +184,7 @@ python bake_lighting.py <input.ply> <scene_lights.json> <output-lit.ply>
 ## Roadmap
 
 ### Pipeline
+- **Orbit camera rework** — square renders (~3072×3072, orbits have no preferred orientation — fixes vertical scenes like Dibona), fixed orbit lens decoupled from the scene camera, and orbit radius computed from the FOV (`radius = (diag/2)/sin(FOV/2) × 1.1`) so the scene bounding sphere always fits the frame. Today the orbit copies the scene camera's lens and uses a magic 0.85 × diagonal radius, which crops tiles out of frame on long-lens scenes.
 - **Drag-and-drop launcher** — drop a `.blend`, the full pipeline runs automatically
 - **Emission mesh objects** — reproject light from mesh faces with Emission material (currently only bezier curves handled by bake fallback)
 - **COPC raw tile integration** — full pipeline validated end-to-end (in progress)
