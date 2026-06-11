@@ -106,8 +106,15 @@ def main():
     lit_files = sorted(glob.glob(os.path.join(lit_dir, "*_lit.laz")))
     if not lit_files:
         die("no *_lit.laz produced")
-    newest_lit = max(os.path.getmtime(f) for f in lit_files)
-    if os.path.exists(copc_out) and os.path.getmtime(copc_out) > newest_lit:
+    # Manifest = exact set of merged inputs + mtimes. An mtime-only check
+    # misses a changed tile SET (e.g. tiles removed after a footprint fix).
+    manifest_path = copc_out + ".manifest.json"
+    manifest = {os.path.basename(f): os.path.getmtime(f) for f in lit_files}
+    old = None
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            old = json.load(f)
+    if os.path.exists(copc_out) and old == manifest:
         banner(3, "merge — COPC up to date, skipping")
         rebuilt = False
     else:
@@ -120,6 +127,8 @@ def main():
                 os.remove(tmp)
             die("untwine failed")
         os.replace(tmp, copc_out)
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=1)
         rebuilt = True
 
     # ── Stage 4 — register in viewer ─────────────────────────────────────────

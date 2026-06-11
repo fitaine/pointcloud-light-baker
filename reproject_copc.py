@@ -141,7 +141,12 @@ def auto_align(capture_dir, tiles_dir):
                  "The cloud in the .blend does not match these tiles (wrong scene,\n"
                  "wrong tiles_dir, or the cloud was scaled/rotated). Refusing to\n"
                  "produce a misaligned reprojection.")
-    return np.array([tx, ty, dz], dtype=np.float64)
+    # lambert-frame footprint of the cloud actually loaded in the .blend —
+    # used to select which tiles to process (the .blend may use only a
+    # subset of what sits in the tiles folder)
+    extent = (bmn[0] + tx, bmn[1] + ty,
+              bmn[0] + bW * cell + tx, bmn[1] + bH * cell + ty)
+    return np.array([tx, ty, dz], dtype=np.float64), extent
 
 
 UNSEEN_DIM = 0.15
@@ -181,12 +186,35 @@ def main():
                          'albedo (x0.15) instead of black')
     args = ap.parse_args()
 
+    blend_extent = None
     if args.origin:
         origin = np.array([float(v) for v in args.origin.split(',')], dtype=np.float64)
         log(f"manual origin {origin}")
     else:
-        origin = auto_align(args.capture_dir, args.tiles_dir)
+        origin, blend_extent = auto_align(args.capture_dir, args.tiles_dir)
     os.makedirs(args.out_dir, exist_ok=True)
+
+    # ── Tile selection — only tiles the .blend cloud actually covers ────────
+    # The tiles folder may hold more tiles than the scene uses. Tiles outside
+    # the blend footprint would sample black background pixels from the
+    # renders → dark frame around the scene. Require > 50 m overlap.
+    MARGIN = 50.0
+    selected = []
+    for t in sorted(os.listdir(args.tiles_dir)):
+        if not t.lower().endswith(('.laz', '.las')):
+            continue
+        if blend_extent is not None:
+            h = laspy.open(os.path.join(args.tiles_dir, t)).header
+            x0, y0, x1, y1 = blend_extent
+            ov_x = min(h.x_max, x1) - max(h.x_min, x0)
+            ov_y = min(h.y_max, y1) - max(h.y_min, y0)
+            if ov_x < MARGIN or ov_y < MARGIN:
+                log(f"skip {t} — outside the blend cloud footprint")
+                continue
+        selected.append(t)
+    if not selected:
+        sys.exit("ERROR: no tiles overlap the blend cloud footprint.")
+    log(f"{len(selected)} tiles selected")
     ortho = OrthoSampler(args.raster) if args.raster else None
     if ortho is None:
         print("WARNING: no --raster — unseen points will be black. "
@@ -208,6 +236,23 @@ def main():
 
     bw, bh = W // ZBUF_DOWNSCALE, H // ZBUF_DOWNSCALE
 
+    # Resume fast-path: if every selected tile already has its output, skip
+    # Phase A entirely (z-buffers are only needed to color tiles).
+    def _out_for(t):
+        return os.path.join(args.out_dir,
+                            os.path.basename(t).replace('.copc.laz', '')
+                            .replace('.laz', '').replace('.las', '') + '_lit.laz')
+    # Stale outputs from tiles no longer selected would get merged into the
+    # final COPC — remove them.
+    sel_outs = {os.path.basename(_out_for(t)) for t in selected}
+    for f in os.listdir(args.out_dir):
+        if f.endswith('_lit.laz') and f not in sel_outs:
+            os.remove(os.path.join(args.out_dir, f))
+            log(f"removed stale {f} (tile not in blend footprint)")
+    if all(os.path.exists(_out_for(t)) for t in selected):
+        print(f"All {len(selected)} selected tiles already done — nothing to reproject.")
+        return
+
     # ── Phase A: z-buffers ──────────────────────────────────────────────────
     # Built from the raw tiles themselves (strided), shifted into the blend
     # frame with the SAME offset as Phase B — one frame, no reference-PLY
@@ -217,9 +262,7 @@ def main():
         print("Phase A — z-buffers from strided raw tiles")
         ZSTRIDE = 8
         parts = []
-        for t in sorted(os.listdir(args.tiles_dir)):
-            if not t.lower().endswith(('.laz', '.las')):
-                continue
+        for t in selected:
             las = laspy.read(os.path.join(args.tiles_dir, t))
             parts.append((np.stack([np.asarray(las.x), np.asarray(las.y),
                                     np.asarray(las.z)], axis=1)[::ZSTRIDE]
@@ -252,9 +295,8 @@ def main():
             log(f"z-buffers {ci+1}/{len(cams)}")
     del ref
 
-    # ── Phase B: color each IGN tile ────────────────────────────────────────
-    tiles = sorted(f for f in os.listdir(args.tiles_dir)
-                   if f.lower().endswith(('.laz', '.las')))
+    # ── Phase B: color each selected IGN tile ───────────────────────────────
+    tiles = selected
     print(f"\nPhase B — {len(tiles)} tiles")
     grand_total = grand_seen = 0
 
