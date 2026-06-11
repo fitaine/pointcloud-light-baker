@@ -428,6 +428,171 @@ document.getElementById("reset-btn").addEventListener("click", () => {
   applyDefaultView();
 });
 
+// ── Volumetric overlay — ray-marched 3D texture over the point cloud ────────
+// Loads potree/volumes/<id>.bin (RGBA8: rgb=lit radiance, a=extinction) +
+// <id>.json (lambert bbox). Marches per pixel, occluded by the point cloud
+// via the EDL pass depth texture (EDL must be ON — it is by default).
+// Volume id comes from the scene entry { volume: "anneau" } or ?vol= param.
+function sceneVolume(id) {
+  const v = SCENES[id];
+  const urlVol = new URLSearchParams(location.search).get("vol");
+  return urlVol || ((v && typeof v === "object" && v.volume) ? v.volume : null);
+}
+
+const VOL_VERT = `#version 300 es
+precision highp float;
+in vec3 position;
+void main() { gl_Position = vec4(position.xy, 0.999, 1.0); }
+`;
+
+const VOL_FRAG = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+uniform sampler3D uVol;
+uniform sampler2D uDepth;
+uniform vec3 uBoxMin, uBoxMax, uCamPos;
+uniform mat4 uInvVP;
+uniform vec2 uResolution;
+uniform float uRgbMax, uSigmaMax, uGain;
+out vec4 fragColor;
+
+vec3 unproject(vec2 ndcXY, float ndcZ) {
+  vec4 p = uInvVP * vec4(ndcXY, ndcZ, 1.0);
+  return p.xyz / p.w;
+}
+
+void main() {
+  vec2 uv  = gl_FragCoord.xy / uResolution;
+  vec2 ndc = uv * 2.0 - 1.0;
+
+  vec3 p0 = unproject(ndc, -1.0);
+  vec3 p1 = unproject(ndc,  1.0);
+  vec3 dir = normalize(p1 - p0);
+
+  // AABB intersection
+  vec3 inv = 1.0 / dir;
+  vec3 tA = (uBoxMin - uCamPos) * inv;
+  vec3 tB = (uBoxMax - uCamPos) * inv;
+  vec3 tMin3 = min(tA, tB), tMax3 = max(tA, tB);
+  float t0 = max(max(tMin3.x, tMin3.y), tMin3.z);
+  float t1 = min(min(tMax3.x, tMax3.y), tMax3.z);
+  t0 = max(t0, 0.0);
+  if (t0 >= t1) discard;
+
+  // occlusion: world distance of the point-cloud surface at this pixel
+  float d = texture(uDepth, uv).r;
+  if (d < 1.0) {
+    vec3 scenePos = unproject(ndc, d * 2.0 - 1.0);
+    t1 = min(t1, distance(scenePos, uCamPos));
+    if (t0 >= t1) discard;
+  }
+
+  const int STEPS = 96;
+  float dt = (t1 - t0) / float(STEPS);
+  vec3 C = vec3(0.0);
+  float T = 1.0;
+  for (int i = 0; i < STEPS; i++) {
+    float t = t0 + (float(i) + 0.5) * dt;
+    vec3 p = uCamPos + dir * t;
+    vec3 tc = (p - uBoxMin) / (uBoxMax - uBoxMin);
+    vec4 s = texture(uVol, tc);
+    float sigma = s.a * uSigmaMax;
+    if (sigma > 1e-6) {
+      float a = 1.0 - exp(-sigma * dt);
+      C += T * a * s.rgb * uRgbMax * uGain;
+      T *= 1.0 - a;
+      if (T < 0.01) break;
+    }
+  }
+  if (T > 0.999) discard;
+  // simple tonemap + sRGB-ish encode to match the baked cloud colors
+  C = pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2));
+  fragColor = vec4(C, 1.0 - T);
+}
+`;
+
+let _vol = null;
+async function initVolume(volId) {
+  try {
+    const meta = await (await fetch(`volumes/${volId}.json?v=${CLOUD_VERSION}`)).json();
+    const buf  = await (await fetch(`volumes/${volId}.bin?v=${CLOUD_VERSION}`)).arrayBuffer();
+    const [NX, NY, NZ] = meta.shape;
+    const tex = new THREE.DataTexture3D(new Uint8Array(buf), NX, NY, NZ);
+    tex.format = THREE.RGBAFormat;
+    tex.type = THREE.UnsignedByteType;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.unpackAlignment = 1;
+    tex.needsUpdate = true;
+
+    const mat = new THREE.RawShaderMaterial({
+      vertexShader: VOL_VERT,
+      fragmentShader: VOL_FRAG,
+      uniforms: {
+        uVol:        { value: tex },
+        uDepth:      { value: null },
+        uBoxMin:     { value: new THREE.Vector3(...meta.min) },
+        uBoxMax:     { value: new THREE.Vector3(...meta.max) },
+        uCamPos:     { value: new THREE.Vector3() },
+        uInvVP:      { value: new THREE.Matrix4() },
+        uResolution: { value: new THREE.Vector2() },
+        uRgbMax:     { value: meta.rgb_max },
+        uSigmaMax:   { value: meta.sigma_max },
+        uGain:       { value: 1.0 },
+      },
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.CustomBlending,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneBufferGeometry(2, 2), mat);
+    quad.frustumCulled = false;
+    const scene = new THREE.Scene();
+    scene.add(quad);
+    _vol = { mat, scene, cam: new THREE.Camera() };
+    console.log(`[Volume] loaded ${volId} (${NX}x${NY}x${NZ})`);
+
+    // draw after Potree's own render each frame
+    const origRender = viewer.render.bind(viewer);
+    viewer.render = function () {
+      origRender();
+      renderVolumePass();
+    };
+  } catch (err) {
+    console.error("[Volume] failed to load:", volId, err);
+  }
+}
+
+const _m4 = (typeof THREE !== "undefined") ? new THREE.Matrix4() : null;
+function renderVolumePass() {
+  if (!_vol) return;
+  const depthTex = viewer.edlRenderer && viewer.edlRenderer.rtEDL
+    ? viewer.edlRenderer.rtEDL.depthTexture : null;
+  if (!depthTex) return;   // EDL off → no depth → skip overlay
+  const cam = viewer.scene.getActiveCamera();
+  const r = viewer.renderer;
+  const size = r.getDrawingBufferSize(new THREE.Vector2());
+  const u = _vol.mat.uniforms;
+  u.uDepth.value = depthTex;
+  u.uCamPos.value.copy(cam.position);
+  _m4.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+  const inv = u.uInvVP.value.copy(_m4);
+  if (typeof inv.invert === "function") inv.invert();
+  else inv.getInverse(_m4);            // three < r123 API
+  u.uResolution.value.copy(size);
+  const oldAutoClear = r.autoClear;
+  r.autoClear = false;
+  r.render(_vol.scene, _vol.cam);
+  r.autoClear = oldAutoClear;
+}
+
+{
+  const volId = sceneVolume(SCENE_ID);
+  if (volId) initVolume(volId);
+}
+
 // ── FPS counter ───────────────────────────────────────────────────────────────
 let frames = 0, fpsT = performance.now();
 const fpsEl = document.getElementById("fps-line");

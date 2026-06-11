@@ -52,3 +52,4 @@ volumetrics/*.npy
 volumetrics/_check_*.png
 volumetrics/*.npz
 volumetrics/scene_lights.json
+potree/volumes/*.bin
