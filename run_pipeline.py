@@ -10,8 +10,11 @@ the same .blend, and it continues where it stopped.
                      frames.
   Stage 2  Reproject color raw IGN tiles from the renders (auto frame
                      alignment, albedo fallback). Per-tile skip.
-  Stage 3  Merge     untwine → single <scene>.copc.laz (skipped if up to date)
-  Stage 4  Register  add scene to potree/index.html SCENES + bump cache version
+  Stage 2b Relight   albedo x light separation (albedo_relight.py) — texture
+                     from the ortho, lighting from the renders. Per-tile skip.
+  Stage 3  Merge     untwine → <scene>.copc.laz + <scene>-detail.copc.laz
+                     (manifest-based skip)
+  Stage 4  Register  add scenes to potree/index.html SCENES + bump cache version
 
 Scene folder conventions (same as lidar_pipeline.py):
   <blend_dir>/LIDAR/LIDAR Bases IGN/   raw IGN .copc.laz tiles
@@ -34,6 +37,7 @@ QGIS_BIN    = r"C:\Program Files\QGIS 3.40.5\bin"
 UNTWINE     = r"C:\Program Files\QGIS 3.40.5\apps\qgis-ltr\untwine.exe"
 CAPTURE_PY  = os.path.join(HERE, "gs-capture", "gs_capture.py")
 REPROJECT   = os.path.join(HERE, "reproject_copc.py")
+RELIGHT     = os.path.join(HERE, "albedo_relight.py")
 POTREE_HTML = os.path.join(HERE, "potree", "index.html")
 N_FRAMES    = 146   # 4 rings x 36 + top + scene cam — keep in sync w/ gs_capture
 
@@ -60,6 +64,7 @@ def main():
     capture    = os.path.join(HERE, "gs-capture", "output", scene_name)
     tiles_dir  = os.path.join(blend_dir, "LIDAR", "LIDAR Bases IGN")
     lit_dir    = os.path.join(blend_dir, "LIDAR", "output-lit-tiles")
+    lit2_dir   = os.path.join(blend_dir, "LIDAR", "output-lit2-tiles")
     copc_out   = os.path.join(HERE, "potree", "pointclouds", f"{slug}.copc.laz")
 
     rasters = glob.glob(os.path.join(blend_dir, "LIDAR", "output", "*_raster.tif"))
@@ -102,31 +107,47 @@ def main():
     if r.returncode != 0:
         die("reprojection failed — relaunch to resume from the last tile")
 
-    # ── Stage 3 — merge to COPC ──────────────────────────────────────────────
-    lit_files = sorted(glob.glob(os.path.join(lit_dir, "*_lit.laz")))
-    if not lit_files:
-        die("no *_lit.laz produced")
-    # Manifest = exact set of merged inputs + mtimes. An mtime-only check
-    # misses a changed tile SET (e.g. tiles removed after a footprint fix).
-    manifest_path = copc_out + ".manifest.json"
-    manifest = {os.path.basename(f): os.path.getmtime(f) for f in lit_files}
-    old = None
-    if os.path.exists(manifest_path):
-        with open(manifest_path) as f:
-            old = json.load(f)
-    if os.path.exists(copc_out) and old == manifest:
-        banner(3, "merge — COPC up to date, skipping")
-        rebuilt = False
+    # ── Stage 2b — albedo x light relight ────────────────────────────────────
+    variants = [(lit_dir, copc_out, slug, scene_name)]
+    if raster:
+        banner("2b", "relight — albedo x light separation")
+        r = subprocess.run([sys.executable, RELIGHT, lit_dir, raster, lit2_dir,
+                            "--capture", capture])
+        if r.returncode != 0:
+            die("relight failed")
+        detail_out = os.path.join(HERE, "potree", "pointclouds",
+                                  f"{slug}-detail.copc.laz")
+        variants.append((lit2_dir, detail_out, f"{slug}-detail",
+                         f"{scene_name} · Detail"))
     else:
-        banner(3, f"merge — untwine {len(lit_files)} tiles → {os.path.basename(copc_out)}")
+        banner("2b", "relight — no raster, skipping")
+
+    # ── Stage 3 — merge to COPC (both variants) ──────────────────────────────
+    rebuilt = False
+    for src_dir, out_path, _, _ in variants:
+        lit_files = sorted(glob.glob(os.path.join(src_dir, "*_lit.laz")))
+        if not lit_files:
+            die(f"no *_lit.laz in {src_dir}")
+        # Manifest = exact set of merged inputs + mtimes. An mtime-only check
+        # misses a changed tile SET (e.g. tiles removed after a footprint fix).
+        manifest_path = out_path + ".manifest.json"
+        manifest = {os.path.basename(f): os.path.getmtime(f) for f in lit_files}
+        old = None
+        if os.path.exists(manifest_path):
+            with open(manifest_path) as f:
+                old = json.load(f)
+        if os.path.exists(out_path) and old == manifest:
+            banner(3, f"merge — {os.path.basename(out_path)} up to date, skipping")
+            continue
+        banner(3, f"merge — untwine {len(lit_files)} tiles → {os.path.basename(out_path)}")
         env = dict(os.environ, PATH=QGIS_BIN + os.pathsep + os.environ["PATH"])
-        tmp = copc_out[:-len(".copc.laz")] + "_tmp.copc.laz"
-        r = subprocess.run([UNTWINE, "-i", lit_dir, "-o", tmp], env=env)
+        tmp = out_path[:-len(".copc.laz")] + "_tmp.copc.laz"
+        r = subprocess.run([UNTWINE, "-i", src_dir, "-o", tmp], env=env)
         if r.returncode != 0 or not os.path.exists(tmp):
             if os.path.exists(tmp):
                 os.remove(tmp)
             die("untwine failed")
-        os.replace(tmp, copc_out)
+        os.replace(tmp, out_path)
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=1)
         rebuilt = True
@@ -136,11 +157,12 @@ def main():
     with open(POTREE_HTML, encoding="utf-8") as f:
         html = f.read()
     changed = False
-    if f'"{slug}"' not in html:
-        html = html.replace("const SCENES = {",
-                            f'const SCENES = {{\n  "{slug}": "{scene_name}",', 1)
-        changed = True
-        print(f"  added scene '{slug}' to SCENES")
+    for _, _, scene_id, label in variants:
+        if f'"{scene_id}"' not in html:
+            html = html.replace("const SCENES = {",
+                                f'const SCENES = {{\n  "{scene_id}": "{label}",', 1)
+            changed = True
+            print(f"  added scene '{scene_id}' to SCENES")
     if rebuilt:
         m = re.search(r'const CLOUD_VERSION = "(\d+)"', html)
         if m:
