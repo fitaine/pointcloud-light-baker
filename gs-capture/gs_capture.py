@@ -32,16 +32,28 @@ print(f"\n[GS Capture] Scene    : {scene_name}")
 print(f"[GS Capture] Output   : {output_dir}")
 
 # ── Constants — tune these without touching the .blend ────────────────────────
-RENDER_WIDTH     = 3840         # 4K — each pixel colors only a few points, detail matters
-RENDER_HEIGHT    = 2160
-RENDER_SAMPLES   = 64           # 64 + denoising is enough for reprojection
+# Square frames: an orbit has no preferred orientation, so portrait scenes
+# (Dibona) and landscape scenes (Chamechaude) are covered identically.
+# Resolution > samples for reprojection: each pixel colors a few points, and
+# multi-view averaging acts as a second denoiser on top of Blender's.
+RENDER_WIDTH     = 4096
+RENDER_HEIGHT    = 4096
+RENDER_SAMPLES   = 32
 RENDER_FORMAT    = "WEBP"       # WEBP (~30% smaller than JPEG), JPEG, or PNG (lossless)
 RENDER_QUALITY   = 90           # WEBP/JPEG quality (90 is visually lossless)
 
 ELEVATIONS       = [8, 20, 45, 70]  # degrees above horizon — low ring catches cliff faces
 STEPS_PER_RING   = 36            # cameras per ring (every 10°)
-ORBIT_MULTIPLIER = 0.85          # orbit radius as fraction of scene diagonal
 TARGET_NAME      = "GS_TARGET"  # exact name of the orbit-centre Empty in .blend
+
+# Orbit camera intrinsics are FIXED — never copied from the scene camera.
+# The artistic camera's lens is irrelevant to the orbit's job (coverage):
+# Dibona's 142 mm telephoto framed ~730 m of a 3400 m scene and most of the
+# terrain was never seen by any orbit frame. The orbit radius is derived
+# from this FOV so the scene's bounding sphere always fits the frame.
+ORBIT_LENS       = 35.0          # mm
+ORBIT_SENSOR     = 36.0          # mm (square sensor for square frames)
+ORBIT_MARGIN     = 1.1           # bounding sphere fills 1/1.1 of the frame
 
 # ── Render settings ───────────────────────────────────────────────────────────
 scene = bpy.context.scene
@@ -164,7 +176,11 @@ def get_scene_bounds():
 
 min_co, max_co = get_scene_bounds()
 diagonal     = (max_co - min_co).length
-orbit_radius = diagonal * ORBIT_MULTIPLIER
+# Radius FROM the FOV: place the camera exactly far enough that the scene's
+# bounding sphere (radius diagonal/2) fits inside the field of view, with
+# ORBIT_MARGIN slack. No magic per-scene factor — universal by construction.
+_half_fov    = math.atan(ORBIT_SENSOR / (2.0 * ORBIT_LENS))
+orbit_radius = (diagonal / 2.0) / math.sin(_half_fov) * ORBIT_MARGIN
 
 print(f"[GS Capture] Bounds   : ({min_co.x:.0f},{min_co.y:.0f},{min_co.z:.0f})"
       f" → ({max_co.x:.0f},{max_co.y:.0f},{max_co.z:.0f})")
@@ -198,8 +214,9 @@ if _scene_cam is not None:
         scene.render.filepath = _val_path
         bpy.ops.render.render(write_still=True)
         print(f"[GS Capture] ✓ cam_scene.webp  ← open this to verify rendering\n")
-    _c2w = [list(row) for row in _scene_cam.matrix_world]
-    frames_data.append({"file_path": "images/cam_scene.webp", "transform_matrix": _c2w})
+    # NOT added to transforms.json: this frame uses the scene camera's own
+    # lens (can be a 142 mm telephoto), which doesn't match the shared orbit
+    # intrinsics. It exists purely as a visual verification image.
 else:
     print("[GS Capture] No scene camera in .blend — skipping validation frame.\n")
 
@@ -221,12 +238,11 @@ print(f"[GS Capture] {total} orbital cameras  ({len(ELEVATIONS)} rings × {STEPS
 # clip_start / clip_end are set explicitly — defaults (0.1 m / 100 m) would make
 # the terrain invisible from orbit (radius typically > 1 000 m).
 cam_data = bpy.data.cameras.new("GS_Cam")
-if _scene_cam is not None and _scene_cam.data is not None:
-    cam_data.lens         = _scene_cam.data.lens
-    cam_data.sensor_width = _scene_cam.data.sensor_width
-    cam_data.sensor_fit   = _scene_cam.data.sensor_fit
-    print(f"[GS Capture] GS_Cam: lens={cam_data.lens:.1f}mm  "
-          f"sensor={cam_data.sensor_width:.1f}mm  (matched to scene camera)")
+cam_data.lens         = ORBIT_LENS
+cam_data.sensor_width = ORBIT_SENSOR
+cam_data.sensor_fit   = 'HORIZONTAL'
+print(f"[GS Capture] GS_Cam: lens={ORBIT_LENS:.1f}mm  sensor={ORBIT_SENSOR:.1f}mm "
+      f"(fixed — scene camera intrinsics are never copied)")
 cam_data.clip_start = 0.001        # effectively zero
 cam_data.clip_end   = 1_000_000    # 1 000 km — effectively infinity
 print(f"[GS Capture] GS_Cam: clip {cam_data.clip_start} … {cam_data.clip_end} m")
