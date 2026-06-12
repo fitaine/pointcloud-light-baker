@@ -2,9 +2,15 @@
 export_volume.py — export Blender volume objects as density grids for the
 web viewer's ray-marcher. Read-only: the .blend is never modified or saved.
 
-Handles VOLUME objects built with [Mesh to Volume] + optional [Volume
-Displace] modifiers (the "Anneau de nuage" recipe). Blender exposes no API
-to read modifier-generated grids, so the script reconstructs them exactly:
+Handles two volume recipes:
+  - VOLUME objects built with [Mesh to Volume] + optional [Volume Displace]
+    modifiers (the "Anneau de nuage" recipe)
+  - MESH objects with a Volume Scatter / Principled Volume material —
+    uniform density inside the mesh (node-driven Density networks are NOT
+    reconstructed; the socket default value is used)
+
+Blender exposes no API to read modifier-generated grids, so the script
+reconstructs them exactly:
 
   - the undisplaced volume is rebuilt in Geometry Nodes (Mesh to Density
     Grid on the modifier's source object, world space) and sampled with
@@ -80,31 +86,64 @@ def world_bbox(obj):
 
 
 def volume_shader_params(obj):
+    """Read volume shader params — Principled Volume or plain Volume Scatter."""
     for slot in obj.material_slots:
         mat = slot.material
-        if mat and mat.node_tree:
-            pv = next((n for n in mat.node_tree.nodes
-                       if n.type == 'PRINCIPLED_VOLUME'), None)
-            if pv:
-                g = lambda nm: pv.inputs[nm].default_value
-                return {'color': list(g('Color'))[:3],
-                        'density_input': g('Density'),
-                        'anisotropy': g('Anisotropy'),
-                        'emission_strength': g('Emission Strength'),
-                        'emission_color': list(g('Emission Color'))[:3]}
+        if not (mat and mat.node_tree):
+            continue
+        pv = next((n for n in mat.node_tree.nodes
+                   if n.type == 'PRINCIPLED_VOLUME'), None)
+        if pv:
+            g = lambda nm: pv.inputs[nm].default_value
+            return {'color': list(g('Color'))[:3],
+                    'density_input': g('Density'),
+                    'anisotropy': g('Anisotropy'),
+                    'emission_strength': g('Emission Strength'),
+                    'emission_color': list(g('Emission Color'))[:3]}
+        vs = next((n for n in mat.node_tree.nodes
+                   if n.type == 'VOLUME_SCATTER'), None)
+        if vs:
+            if vs.inputs['Density'].is_linked:
+                print("  WARNING: Volume Scatter Density is node-driven — "
+                      "using the socket default value (texture networks "
+                      "are not reconstructed)")
+            g = lambda nm: vs.inputs[nm].default_value
+            return {'color': list(g('Color'))[:3],
+                    'density_input': g('Density'),
+                    'anisotropy': g('Anisotropy'),
+                    'emission_strength': 0.0,
+                    'emission_color': [1.0, 1.0, 1.0]}
     return None
+
+
+def has_volume_material(obj):
+    """MESH whose material plugs a volume shader into the output's Volume."""
+    if obj.type != 'MESH':
+        return False
+    for slot in obj.material_slots:
+        mat = slot.material
+        if not (mat and mat.node_tree):
+            continue
+        if any(n.type in ('VOLUME_SCATTER', 'PRINCIPLED_VOLUME')
+               for n in mat.node_tree.nodes):
+            return True
+    return False
 
 
 def export_volume(obj):
     slug = re.sub(r'[^a-z0-9]+', '-', obj.name.lower()).strip('-')
     print(f"\n[VolExport] {obj.name} → {slug}")
     m2v = next((m for m in obj.modifiers if m.type == 'MESH_TO_VOLUME'), None)
-    if m2v is None or m2v.object is None:
+    if obj.type == 'MESH':
+        # Mesh with a Volume Scatter / Principled Volume material: the volume
+        # is "uniform density inside the mesh" — the mesh itself is the source.
+        m2v, disp, src = None, None, obj
+    elif m2v is None or m2v.object is None:
         print("  no Mesh to Volume modifier — skipped (unsupported volume type)")
         return
-    disp = next((m for m in obj.modifiers if m.type == 'VOLUME_DISPLACE'), None)
-
-    src = m2v.object
+    else:
+        disp = next((m for m in obj.modifiers if m.type == 'VOLUME_DISPLACE'), None)
+        src = m2v.object
     mn, mx = world_bbox(src)
     pad = (disp.strength * PAD_FACTOR) if disp else (mx - mn).max() * 0.05
     mn, mx = mn - pad, mx + pad
@@ -114,7 +153,9 @@ def export_volume(obj):
     NX, NY, NZ = (int(v) for v in res)
     # source voxel size: replicate VOXEL_AMOUNT semantics on the source bbox
     src_ext = world_bbox(src)[1] - world_bbox(src)[0]
-    if m2v.resolution_mode == 'VOXEL_AMOUNT':
+    if m2v is None:
+        vsize = float(long_axis / LONG_RES)   # mesh volume: match export cell
+    elif m2v.resolution_mode == 'VOXEL_AMOUNT':
         vsize = float(src_ext.max() / max(1, m2v.voxel_amount))
     else:
         vsize = m2v.voxel_size
@@ -122,7 +163,7 @@ def export_volume(obj):
     print(f"  grid {NX}x{NY}x{NZ}  voxel {((mx-mn)/res).round(1).tolist()} m  "
           f"src voxel {vsize:.2f} m")
 
-    ng = build_sampler(src, m2v.density, vsize)
+    ng = build_sampler(src, m2v.density if m2v else 1.0, vsize)
     mesh = bpy.data.meshes.new('_VOLEXPORT_M')
     mesh.vertices.add(NX * NY)
     probe = bpy.data.objects.new('_VOLEXPORT_PROBE', mesh)
@@ -216,9 +257,10 @@ def export_lights():
 export_lights()
 
 targets = [o for o in bpy.context.scene.objects
-           if o.type == 'VOLUME' and (ONLY is None or o.name == ONLY)]
+           if (o.type == 'VOLUME' or has_volume_material(o))
+           and (ONLY is None or o.name == ONLY)]
 if not targets:
-    print("[VolExport] no VOLUME objects found" +
+    print("[VolExport] no VOLUME objects or volume-material meshes found" +
           (f" named '{ONLY}'" if ONLY else ""))
 for obj in targets:
     export_volume(obj)

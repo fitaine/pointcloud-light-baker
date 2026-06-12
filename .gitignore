@@ -53,3 +53,12 @@ volumetrics/_check_*.png
 volumetrics/*.npz
 volumetrics/scene_lights.json
 potree/volumes/*.bin
+
+# Per-scene volumetrics exports (density grids, bakes — regenerable)
+volumetrics/*/
+!volumetrics/test-fog/
+!volumetrics/test-beam/
+volumetrics/test-fog/*.npy
+volumetrics/test-fog/*.npz
+volumetrics/test-beam/*.npy
+volumetrics/test-beam/*.npz

@@ -63,6 +63,9 @@ def main():
     ap.add_argument('slug')
     ap.add_argument('--dir', default=os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument('--kvol', type=float, default=K_VOL_DEFAULT)
+    ap.add_argument('--ambient', type=float, default=0.25,
+                    help='world-light weight; 0 = beam/sun only, the unlit '
+                         'fog stays dark and absorbs (no visible volume box)')
     args = ap.parse_args()
     D = args.dir
 
@@ -90,15 +93,20 @@ def main():
     for L in lights:
         col = np.array(L['color'], dtype=np.float32)
         if L['type'] == 'WORLD':
-            rgb += col * L['energy'] * 0.25     # ambient, unshadowed
-            log(f"world ambient {L['energy']:.2f}")
+            if args.ambient > 0:
+                rgb += col * L['energy'] * args.ambient   # unshadowed
+            log(f"world ambient {L['energy']:.2f} x {args.ambient}")
             continue
         if L['type'] == 'SUN':
             E = np.full(len(occ), L['energy'], dtype=np.float32)
             T = transmittance(sigma, gmin, cell, pts, L['direction'], True)
         else:   # POINT / SPOT / AREA — inverse square from light position
             lp = np.array(L['location'], dtype=np.float32)
-            d2 = np.maximum(((pts - lp) ** 2).sum(1), MIN_DIST ** 2)
+            # clamp at one cell, not 1 m — a voxel containing the light
+            # otherwise blows up the dynamic range and the 8-bit pack
+            # crushes the rest of the volume to black
+            min_d = max(MIN_DIST, float(cell.max()))
+            d2 = np.maximum(((pts - lp) ** 2).sum(1), min_d ** 2)
             E = L['energy'] / (4 * np.pi * d2)
             if L['type'] == 'SPOT':
                 axis = np.array(L['direction'], dtype=np.float32)
