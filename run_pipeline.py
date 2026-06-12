@@ -21,11 +21,19 @@ Scene folder conventions (same as lidar_pipeline.py):
   <blend_dir>/LIDAR/output/*_raster.tif BDORTHO ortho (albedo fallback)
 
 Usage:
-  python run_pipeline.py <scene.blend> [--both]
+  python run_pipeline.py <scene.blend> [--both] [--test]
 
   --both  also merge/register the plain reprojection cloud (diagnostic:
           shows exactly what the Cycles renders saw, no ortho texture).
           By default only <scene>-detail is published when a raster exists.
+  --test  fast low-quality preset for pipeline iteration: 26 orbit frames
+          at 720/16spp (vs 146 at 4k/128spp), 4 m/px ortho, points
+          decimated 1/10. All outputs are suffixed "-test" (capture dir,
+          lit tiles, COPC, scene entry) so they never collide with a
+          production run of the same .blend.
+  --full  skip the interactive test-mode question (force production quality).
+          With neither flag, an interactive terminal asks "Test mode? [y/N]";
+          non-interactive runs default to full quality.
 """
 
 import glob
@@ -34,6 +42,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 HERE        = os.path.dirname(os.path.abspath(__file__))
 LIDAR_PROJ  = r"C:\Users\Tiphaine\Pictures\3D\LIDAR PROJECT"   # lidar_pipeline.py
@@ -46,6 +55,9 @@ REPROJECT   = os.path.join(HERE, "reproject_copc.py")
 RELIGHT     = os.path.join(HERE, "albedo_relight.py")
 POTREE_HTML = os.path.join(HERE, "potree", "index.html")
 N_FRAMES    = 146   # 4 rings x 36 + top + scene cam — keep in sync w/ gs_capture
+N_FRAMES_TEST = 26  # 2 rings x 12 + top + scene cam — gs_capture --test preset
+TEST_RES    = 4.0   # test-mode ortho m/px — low-def sat RGB (native is 0.20)
+TEST_DECIMATE = 10  # test-mode point decimation — keep 1 point in N
 
 
 def raster_res(path):
@@ -58,19 +70,19 @@ def raster_res(path):
         return None
 
 
-def ensure_native_raster(lit_dir, blend_dir, slug, current):
+def ensure_native_raster(lit_dir, blend_dir, slug, current, want_res=NATIVE_RES):
     """Never trust the raster in the folder — measure it. If it's missing or
-    coarser than NATIVE_RES, fetch the IGN BDORTHO at native resolution over
+    coarser than want_res, fetch the IGN BDORTHO at that resolution over
     the exact extent of the lit tiles. Returns the raster path to use."""
     res = raster_res(current) if current else None
-    if res is not None and res <= NATIVE_RES + 0.01:
+    if res is not None and res <= want_res + 0.01:
         print(f"  raster ok: {os.path.basename(current)} @ {res:g} m/px")
         return current
     if res is not None:
         print(f"  raster {os.path.basename(current)} is {res:g} m/px — "
-              f"fetching native {NATIVE_RES} m/px from IGN")
+              f"fetching {want_res} m/px from IGN")
     else:
-        print(f"  no raster — fetching native {NATIVE_RES} m/px from IGN")
+        print(f"  no raster — fetching {want_res} m/px from IGN")
 
     import laspy
     import math
@@ -84,11 +96,11 @@ def ensure_native_raster(lit_dir, blend_dir, slug, current):
     x1, y1 = math.ceil(x1), math.ceil(y1)
 
     out = os.path.join(blend_dir, "LIDAR", "output",
-                       f"{slug}-ortho-020_raster.tif")
+                       f"{slug}-ortho-{int(round(want_res * 100)):03d}_raster.tif")
     sys.path.insert(0, LIDAR_PROJ)
     from lidar_pipeline import fetch_raster_tiled
     try:
-        fetch_raster_tiled(x0, y0, x1, y1, NATIVE_RES,
+        fetch_raster_tiled(x0, y0, x1, y1, want_res,
                            "ORTHOIMAGERY.ORTHOPHOTOS", out)
     except Exception as exc:
         if current:
@@ -96,6 +108,93 @@ def ensure_native_raster(lit_dir, blend_dir, slug, current):
             return current
         die(f"ortho fetch failed and no fallback raster: {exc}")
     return out
+
+
+WFS_DALLES = ("https://data.geopf.fr/wfs/ows?service=WFS&version=2.0.0"
+              "&request=GetFeature&typeNames=IGNF_NUAGES-DE-POINTS-LIDAR-HD:dalle"
+              "&outputFormat=application/json&count=200&srsName=EPSG:2154"
+              "&bbox={x0},{y0},{x1},{y1},EPSG:2154")
+
+
+def ensure_tiles(tiles_dir, blend_dir):
+    """If the tiles folder is empty, download the IGN LiDAR HD tiles covering
+    the scene. The Lambert bbox comes from the scene's intermediate LAZ in
+    LIDAR/output/ (the lidar_pipeline merge, still in Lambert-93)."""
+    if any(f.lower().endswith((".laz", ".las")) for f in os.listdir(tiles_dir)):
+        return
+    print("  tiles folder is empty — fetching IGN LiDAR HD tiles")
+    srcs = glob.glob(os.path.join(blend_dir, "LIDAR", "output", "*.laz"))
+    if not srcs:
+        die(f"tiles folder is EMPTY: {tiles_dir}\n"
+            "and no LIDAR/output/*.laz to derive the scene bbox from.\n"
+            "Download the raw IGN LiDAR HD .copc.laz tiles manually.")
+    import laspy
+    import urllib.request
+    h = laspy.open(max(srcs, key=os.path.getsize)).header
+    # shrink by 1 m so tiles that only touch the bbox edge are not pulled in
+    url = WFS_DALLES.format(x0=h.x_min + 1, y0=h.y_min + 1,
+                            x1=h.x_max - 1, y1=h.y_max - 1)
+    print(f"  scene bbox {h.x_min:.0f},{h.y_min:.0f} .. {h.x_max:.0f},{h.y_max:.0f}")
+    with urllib.request.urlopen(url, timeout=60) as r:
+        feats = json.load(r).get("features", [])
+    # the WFS bbox filter is loose (returns edge-neighbours) — keep only
+    # tiles whose geometry truly overlaps the scene bbox (1 m inset, so a
+    # centimetre overhang doesn't pull in a whole neighbouring tile)
+    def overlaps(f):
+        rings = f["geometry"]["coordinates"]
+        pts = rings[0] if f["geometry"]["type"] == "Polygon" else rings[0][0]
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        return (min(xs) < h.x_max - 1 and max(xs) > h.x_min + 1 and
+                min(ys) < h.y_max - 1 and max(ys) > h.y_min + 1)
+    feats = [f for f in feats if overlaps(f)]
+    if not feats:
+        die("IGN WFS returned no LiDAR HD tiles for the scene bbox")
+    print(f"  {len(feats)} tiles to download")
+    for i, f in enumerate(feats):
+        p = f["properties"]
+        name = p.get("name_download") or p["name"] + ".copc.laz"
+        out = os.path.join(tiles_dir, name)
+        if os.path.exists(out):
+            print(f"  [{i+1}/{len(feats)}] {name} — already here")
+            continue
+        tmp = out + ".part"
+        try:
+            # the geoplateforme download server 403s Python's default UA
+            req = urllib.request.Request(
+                p["url"], headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as fo:
+                total = int(r.headers.get("Content-Length") or 0)
+                done = 0
+                t0 = last = time.time()
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    fo.write(chunk)
+                    done += len(chunk)
+                    now = time.time()
+                    if now - last >= 0.25 or done == total:
+                        last = now
+                        speed = done / max(now - t0, 1e-3)
+                        if total:
+                            frac = done / total
+                            bar = "█" * int(28 * frac) + "░" * (28 - int(28 * frac))
+                            eta = (total - done) / max(speed, 1)
+                            line = (f"  [{i+1}/{len(feats)}] {name}  {bar} "
+                                    f"{frac*100:3.0f}%  {done/1e6:.0f}/{total/1e6:.0f} MB"
+                                    f"  {speed/1e6:.1f} MB/s  ETA {eta:4.0f}s")
+                        else:
+                            line = (f"  [{i+1}/{len(feats)}] {name}  "
+                                    f"{done/1e6:.0f} MB  {speed/1e6:.1f} MB/s")
+                        print("\r" + line, end="", flush=True)
+            print()
+            os.replace(tmp, out)
+        except Exception as exc:
+            print()
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            die(f"tile download failed ({exc}) — relaunch to resume")
 
 
 def compute_scene_view(capture):
@@ -151,19 +250,35 @@ def die(msg):
 
 def main():
     if len(sys.argv) < 2 or not sys.argv[1].lower().endswith(".blend"):
-        die("usage: python run_pipeline.py <scene.blend> [--both]")
+        die("usage: python run_pipeline.py <scene.blend> [--both] [--test]")
     both = "--both" in sys.argv[2:]
+    test = "--test" in sys.argv[2:]
+    # No flag? Ask. (--test or --full skip the question; non-interactive runs
+    # — schedulers, scripts — default to full quality without blocking.)
+    if not test and "--full" not in sys.argv[2:] and sys.stdin.isatty():
+        try:
+            test = input("  Test mode — fast low-quality preset? [y/N] "
+                         ).strip().lower() in ("y", "yes", "o", "oui")
+        except EOFError:
+            pass
     blend = os.path.abspath(sys.argv[1])
     if not os.path.exists(blend):
         die(f"not found: {blend}")
 
     blend_dir  = os.path.dirname(blend)
     scene_name = os.path.splitext(os.path.basename(blend))[0]
+    # TEST preset: everything low-quality and namespaced "-test" so a test run
+    # never touches the production capture, lit tiles, COPCs or scene entries.
+    if test:
+        print("\n  ── TEST PRESET — fast low-quality run, outputs suffixed -test ──")
+        scene_name += "-test"
+    n_frames   = N_FRAMES_TEST if test else N_FRAMES
     slug       = re.sub(r"[^a-z0-9]+", "-", scene_name.lower()).strip("-")
     capture    = os.path.join(HERE, "gs-capture", "output", scene_name)
     tiles_dir  = os.path.join(blend_dir, "LIDAR", "LIDAR Bases IGN")
-    lit_dir    = os.path.join(blend_dir, "LIDAR", "output-lit-tiles")
-    lit2_dir   = os.path.join(blend_dir, "LIDAR", "output-lit2-tiles")
+    suffix     = "-test" if test else ""
+    lit_dir    = os.path.join(blend_dir, "LIDAR", f"output-lit-tiles{suffix}")
+    lit2_dir   = os.path.join(blend_dir, "LIDAR", f"output-lit2-tiles{suffix}")
     copc_out   = os.path.join(HERE, "potree", "pointclouds", f"{slug}.copc.laz")
 
     rasters = glob.glob(os.path.join(blend_dir, "LIDAR", "output", "*_raster.tif"))
@@ -177,18 +292,20 @@ def main():
     if not os.path.isdir(tiles_dir):
         die(f"no tiles folder: {tiles_dir}\n"
             "Expected raw IGN .copc.laz tiles in <blend_dir>/LIDAR/LIDAR Bases IGN/")
+    ensure_tiles(tiles_dir, blend_dir)
 
     # ── Stage 1 — render orbit ───────────────────────────────────────────────
     tj = os.path.join(capture, "transforms.json")
     dem = os.path.join(capture, "cloud_dem.npy")
     have = len(glob.glob(os.path.join(capture, "images", "*.webp")))
-    if os.path.exists(tj) and os.path.exists(dem) and have >= N_FRAMES:
+    if os.path.exists(tj) and os.path.exists(dem) and have >= n_frames:
         banner(1, f"render — complete ({have} frames), skipping")
     else:
-        banner(1, f"render — {have}/{N_FRAMES} frames present, launching Blender")
+        banner(1, f"render — {have}/{n_frames} frames present, launching Blender")
         os.makedirs(os.path.join(capture, "images"), exist_ok=True)
         r = subprocess.run([BLENDER, "--background", blend,
-                            "--python", CAPTURE_PY, "--", capture, scene_name])
+                            "--python", CAPTURE_PY, "--", capture, scene_name]
+                           + (["--test"] if test else []))
         if r.returncode != 0:
             die("Blender render failed — relaunch to resume from the last frame")
         if not (os.path.exists(tj) and os.path.exists(dem)):
@@ -200,6 +317,10 @@ def main():
     n_lit   = len(glob.glob(os.path.join(lit_dir, "*_lit.laz")))
     banner(2, f"reproject — {n_lit}/{n_tiles} tiles done")
     cmd = [sys.executable, REPROJECT, "tiles", capture, tiles_dir, lit_dir]
+    if test:
+        # decimated points + relaxed alignment guard: forest canopy inflates
+        # the residual; in test mode favour getting through the pipeline
+        cmd += ["--decimate", str(TEST_DECIMATE), "--max-residual", "5"]
     if raster:
         cmd += ["--raster", raster]
     r = subprocess.run(cmd)
@@ -212,7 +333,8 @@ def main():
     # actually saw — published only with --both.
     variants = []
     banner("2b", "relight — albedo x light separation")
-    raster = ensure_native_raster(lit_dir, blend_dir, slug, raster)
+    raster = ensure_native_raster(lit_dir, blend_dir, slug, raster,
+                                  TEST_RES if test else NATIVE_RES)
     if raster:
         r = subprocess.run([sys.executable, RELIGHT, lit_dir, raster, lit2_dir,
                             "--capture", capture])

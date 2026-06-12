@@ -72,7 +72,7 @@ def project(xyz, R, C, fl, cx, cy, W, H):
 MAX_ALIGN_RESIDUAL = 2.0   # metres — abort if the frames don't truly match
 
 
-def auto_align(capture_dir, tiles_dir):
+def auto_align(capture_dir, tiles_dir, max_residual=MAX_ALIGN_RESIDUAL):
     """Find the lambert→blend transform by DEM cross-correlation.
 
     gs_capture.py exports cloud_dem.npy — a max-Z grid of the cloud actually
@@ -138,8 +138,8 @@ def auto_align(capture_dir, tiles_dir):
     ty = (gy0 + dy * cell) - bmn[1]
     log(f"auto-align: blend + ({tx:.1f}, {ty:.1f}, {dz:.1f}) = lambert   "
         f"residual {err:.2f} m")
-    if err > MAX_ALIGN_RESIDUAL:
-        sys.exit(f"ERROR: alignment residual {err:.2f} m > {MAX_ALIGN_RESIDUAL} m.\n"
+    if err > max_residual:
+        sys.exit(f"ERROR: alignment residual {err:.2f} m > {max_residual} m.\n"
                  "The cloud in the .blend does not match these tiles (wrong scene,\n"
                  "wrong tiles_dir, or the cloud was scaled/rotated). Refusing to\n"
                  "produce a misaligned reprojection.")
@@ -187,6 +187,11 @@ def main():
     ap.add_argument('out_dir')
     ap.add_argument('--origin', default=None,
                     help='Override X,Y,Z lambert→blend offset (skips auto-align)')
+    ap.add_argument('--decimate', type=int, default=1,
+                    help='keep 1 point in N (test preset — full density is 1)')
+    ap.add_argument('--max-residual', type=float, default=MAX_ALIGN_RESIDUAL,
+                    help='alignment abort threshold in metres (forest canopy '
+                         'inflates the residual on downsampled blend clouds)')
     ap.add_argument('--raster', default=None,
                     help='BDORTHO GeoTIFF — unseen points get dimmed satellite '
                          'albedo (x0.15) instead of black')
@@ -197,7 +202,8 @@ def main():
         origin = np.array([float(v) for v in args.origin.split(',')], dtype=np.float64)
         log(f"manual origin {origin}")
     else:
-        origin, blend_extent = auto_align(args.capture_dir, args.tiles_dir)
+        origin, blend_extent = auto_align(args.capture_dir, args.tiles_dir,
+                                          args.max_residual)
     os.makedirs(args.out_dir, exist_ok=True)
 
     # ── Tile selection — only tiles the .blend cloud actually covers ────────
@@ -266,7 +272,9 @@ def main():
     # than the z-buffer grid needs.
     if args.reference_ply.lower() == 'tiles':
         print("Phase A — z-buffers from strided raw tiles")
-        ZSTRIDE = 8
+        # decimated runs also stride the z-buffer source harder — the z-buffer
+        # grid needs density, not exhaustiveness, and 1/8 is already overkill
+        ZSTRIDE = 8 * max(1, args.decimate // 4)
         parts = []
         for t in selected:
             las = laspy.read(os.path.join(args.tiles_dir, t))
@@ -316,10 +324,13 @@ def main():
             continue
         print(f"\n[{ti+1}/{len(tiles)}] {tile}")
         las = laspy.read(tpath)
+        if args.decimate > 1:
+            las.points = las.points[::args.decimate]
         xyz = np.stack([np.asarray(las.x), np.asarray(las.y), np.asarray(las.z)],
                        axis=1) - origin          # → Blender frame
         n = len(xyz)
-        log(f"{n:,} points")
+        log(f"{n:,} points" + (f" (1/{args.decimate} of tile)"
+                               if args.decimate > 1 else ""))
 
         col_sum = np.zeros((n, 3), dtype=np.float32)
         cnt = np.zeros(n, dtype=np.uint8)
