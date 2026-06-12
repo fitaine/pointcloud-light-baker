@@ -119,10 +119,14 @@ def main():
         if not tile.endswith('_lit.laz'):
             continue
         out_path = os.path.join(args.out_dir, tile)
+        in_path = os.path.join(args.lit_dir, tile)
         if os.path.exists(out_path):
-            log(f"skip {tile} (exists)")
-            continue
-        las = laspy.read(os.path.join(args.lit_dir, tile))
+            out_mtime = os.path.getmtime(out_path)
+            if out_mtime > os.path.getmtime(in_path) and out_mtime > os.path.getmtime(args.raster):
+                log(f"skip {tile} (up to date)")
+                continue
+            log(f"redo {tile} (inputs newer than output)")
+        las = laspy.read(in_path)
         xy = np.stack([np.asarray(las.x), np.asarray(las.y)], axis=1)
         lit = _LUT[(np.stack([np.asarray(las.red), np.asarray(las.green),
                               np.asarray(las.blue)], axis=1) // 257).astype(np.uint8)]
