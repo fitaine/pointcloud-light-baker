@@ -1,0 +1,34 @@
+{
+ "object": "test-fog",
+ "min": [
+  -1700.0,
+  -2000.0,
+  150.0
+ ],
+ "max": [
+  200.0,
+  -100.0,
+  550.0
+ ],
+ "shape": [
+  192,
+  192,
+  40
+ ],
+ "frame": "blend-world",
+ "shader": {
+  "color": [
+   0.9,
+   0.9,
+   0.9
+  ],
+  "density_input": 0.012,
+  "anisotropy": 0.0,
+  "emission_strength": 0.0,
+  "emission_color": [
+   1,
+   1,
+   1
+  ]
+ }
+}
