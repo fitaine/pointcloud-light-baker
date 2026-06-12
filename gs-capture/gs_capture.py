@@ -25,11 +25,14 @@ argv        = sys.argv
 sep         = argv.index("--") + 1
 output_dir  = argv[sep]
 scene_name  = argv[sep + 1]
+TEST_MODE   = "--test" in argv[sep:]
 images_dir  = os.path.join(output_dir, "images")
 os.makedirs(images_dir, exist_ok=True)
 
 print(f"\n[GS Capture] Scene    : {scene_name}")
 print(f"[GS Capture] Output   : {output_dir}")
+if TEST_MODE:
+    print("[GS Capture] TEST PRESET — low res/samples/frames, NOT for publishing")
 
 # ── Constants — tune these without touching the .blend ────────────────────────
 # Square frames: an orbit has no preferred orientation, so portrait scenes
@@ -56,6 +59,17 @@ ORBIT_LENS       = 35.0          # mm
 ORBIT_SENSOR     = 36.0          # mm (square sensor for square frames)
 ORBIT_MARGIN     = 1.1           # bounding sphere fills 1/1.1 of the frame
 
+# ── TEST preset — every quality lever floored for fast pipeline iteration ────
+# ~26 frames at 1k/16spp instead of 146 at 4k/128spp. Geometry/coverage logic
+# (orbit radius, alignment, reprojection) is identical — only quality drops.
+if TEST_MODE:
+    RENDER_WIDTH   = 720
+    RENDER_HEIGHT  = 720
+    RENDER_SAMPLES = 16
+    RENDER_QUALITY = 80
+    ELEVATIONS     = [10, 45]    # 2 rings still see cliffs + plateaus
+    STEPS_PER_RING = 12          # every 30°
+
 # ── Render settings ───────────────────────────────────────────────────────────
 scene = bpy.context.scene
 scene.render.engine                     = 'CYCLES'
@@ -72,6 +86,26 @@ scene.cycles.use_denoising              = False  # temporarily off (user request
 scene.render.use_compositing            = False
 scene.render.use_sequencer              = False
 # Color management left as-is: Filmic/AgX + artist exposure baked into renders.
+
+# ── Hide volumetrics from camera rays (shadows stay) ─────────────────────────
+# Volumes (clouds, fog) are rendered live by the viewer's ray-marcher, so the
+# orbit frames must contain only their SHADOWS on the terrain — not the volume
+# itself, which would be baked into the point colors and then drawn twice.
+# Covers both volume recipes: VOLUME objects and meshes with a volume material
+# (Volume Scatter / Principled Volume) — same detection as export_volume.py.
+# Runtime-only — the .blend is never saved, artist settings are untouched.
+def _has_volume_material(o):
+    return o.type == 'MESH' and any(
+        s.material and s.material.node_tree and any(
+            n.type in ('VOLUME_SCATTER', 'PRINCIPLED_VOLUME')
+            for n in s.material.node_tree.nodes)
+        for s in o.material_slots)
+
+for _o in bpy.context.scene.objects:
+    if _o.type == 'VOLUME' or _has_volume_material(_o):
+        _o.visible_camera = False
+        print(f"[GS Capture] volume '{_o.name}': hidden from camera rays "
+              f"(shadow/indirect kept)")
 
 # ── Force full depsgraph evaluation ──────────────────────────────────────────
 # CRITICAL: in --background mode, Geometry Nodes do NOT evaluate until
@@ -94,7 +128,10 @@ import numpy as np
 DEM_CELL = 10.0
 _pc_pts = []
 for _o in bpy.context.scene.objects:
-    if _o.type == 'MESH' and len(_o.data.polygons) == 0 and len(_o.data.vertices) > 0:
+    # Point cloud = lots of vertices, (almost) no faces. Not strictly zero:
+    # imports/GN sometimes leave a stray polygon on an 11M-vertex cloud.
+    if (_o.type == 'MESH' and len(_o.data.vertices) >= 1000
+            and len(_o.data.polygons) <= len(_o.data.vertices) // 1000):
         _n = len(_o.data.vertices)
         _co = np.empty(_n * 3, dtype=np.float32)
         _o.data.vertices.foreach_get('co', _co)
@@ -166,8 +203,8 @@ def get_scene_bounds():
     mx = Vector((-INF, -INF, -INF))
     found = False
     for obj in bpy.context.scene.objects:
-        if obj.type != 'MESH' or obj.hide_render:
-            continue
+        if obj.type != 'MESH' or obj.hide_render or not obj.visible_camera:
+            continue   # camera-hidden = volumetrics → don't inflate the orbit
         for corner in obj.bound_box:
             wco = obj.matrix_world @ Vector(corner)
             mn.x = min(mn.x, wco.x);  mx.x = max(mx.x, wco.x)
