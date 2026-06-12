@@ -304,7 +304,7 @@ window.addEventListener("unhandledrejection", (ev) => {
 const urlTest = new URLSearchParams(location.search).get("test");
 // Cache-buster: bump when a .copc.laz is rebuilt under the same name —
 // Chrome caches range-request chunks even across hard refreshes.
-const CLOUD_VERSION = "11";
+const CLOUD_VERSION = "13";
 const CLOUD_URL = urlTest
   ? "./Potree_1.8.2/pointclouds/lion_takanawa.copc.laz"
   : `./pointclouds/${SCENE_ID}.copc.laz?v=${CLOUD_VERSION}`;
@@ -545,11 +545,15 @@ uniform mat4 uInvVP;
 uniform vec2 uResolution;
 uniform float uRgbMax, uSigmaMax, uGain;
 uniform float uNZ, uNCOLS, uNROWS;
+uniform vec2 uHalfTexel;
 
 vec2 sliceUV(vec3 tc, float sliceIdx) {
   float col = mod(sliceIdx, uNCOLS);
   float row = floor(sliceIdx / uNCOLS);
-  return (vec2(col, row) + tc.xy) / vec2(uNCOLS, uNROWS);
+  // clamp half a texel inside the tile so linear filtering never bleeds
+  // into the neighbouring slice of the atlas
+  vec2 xy = clamp(tc.xy, uHalfTexel, 1.0 - uHalfTexel);
+  return (vec2(col, row) + xy) / vec2(uNCOLS, uNROWS);
 }
 vec4 sampleVol(vec3 tc) {
   float z  = tc.z * uNZ;
@@ -659,6 +663,7 @@ async function initVolume(volId) {
         uNZ:         { value: NZ },
         uNCOLS:      { value: NCOLS },
         uNROWS:      { value: NROWS },
+        uHalfTexel:  { value: new THREE.Vector2(0.5 / NX, 0.5 / NY) },
       },
       transparent: true,
       depthTest:  false,
@@ -678,7 +683,8 @@ async function initVolume(volId) {
     quad.frustumCulled = false;
     const scene = new THREE.Scene();
     scene.add(quad);
-    _vol = { mat, scene, cam: new THREE.Camera() };
+    _vol = { mat, scene, cam: new THREE.Camera(),
+             boxMin: meta.min, boxMax: meta.max };
     console.log(`[Volume] loaded ${volId} ${NX}x${NY}x${NZ} → atlas ${atlasW}x${atlasH} (${NCOLS}×${NROWS})`);
 
     // Draw after Potree's own render each frame
@@ -711,8 +717,16 @@ function renderVolumePass() {
   const size = r.getDrawingBufferSize(new THREE.Vector2());
   const u = _vol.mat.uniforms;
   u.uDepth.value = useDepth;
-  u.uCamPos.value.copy(cam.position);
-  _m4.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+  // All shader math is camera-relative: Lambert-93 coords (~6.4e6) destroy
+  // float32 precision in the GPU (blocky sampling + jitter while moving).
+  // Subtractions happen here in JS float64; the shader only sees small values.
+  const cp = cam.position;
+  u.uCamPos.value.set(0, 0, 0);
+  u.uBoxMin.value.set(_vol.boxMin[0] - cp.x, _vol.boxMin[1] - cp.y, _vol.boxMin[2] - cp.z);
+  u.uBoxMax.value.set(_vol.boxMax[0] - cp.x, _vol.boxMax[1] - cp.y, _vol.boxMax[2] - cp.z);
+  _m4.copy(cam.matrixWorldInverse);
+  _m4.elements[12] = _m4.elements[13] = _m4.elements[14] = 0;  // drop view translation
+  _m4.premultiply(cam.projectionMatrix);
   const inv = u.uInvVP.value.copy(_m4);
   if (typeof inv.invert === "function") inv.invert();
   else inv.getInverse(_m4);            // three < r123 API
