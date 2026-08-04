@@ -488,11 +488,19 @@ def main():
             # Scene already registered — update view/label in place so re-running
             # the pipeline after moving the blend camera actually takes effect.
             pat = '"' + re.escape(scene_id) + r'":\s*(\{(?:[^{}]|\{[^{}]*\})*\}|"[^"]*")'
-            html = re.sub(pat,
-                lambda m, _s=scene_id, _e=entry: f'"{_s}": {_e}',
-                html, count=1)
-            changed = True
-            print(f"  updated view for '{scene_id}'")
+            _existing = re.search(pat, html)
+            # …unless the view was hand-tuned in the viewer (press V, paste, add
+            # "viewLocked": true). The .blend camera composes a still; how a
+            # scene should be framed for a viewer you move around in is a
+            # separate judgement, and a re-run must not silently discard it.
+            if _existing and re.search(r'"viewLocked"\s*:\s*(true|1)', _existing.group(1)):
+                print(f"  '{scene_id}' is viewLocked — keeping the hand-tuned view")
+            else:
+                html = re.sub(pat,
+                    lambda m, _s=scene_id, _e=entry: f'"{_s}": {_e}',
+                    html, count=1)
+                changed = True
+                print(f"  updated view for '{scene_id}'")
     if rebuilt:
         m = re.search(r'const CLOUD_VERSION = "(\d+)"', html)
         if m:
