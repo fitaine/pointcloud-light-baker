@@ -55,12 +55,33 @@
     #loading.fade { opacity: 0; pointer-events: none; }
 
     /* ── 2D / 3D dimension switch — top right (matches the 2D viewer) ─────── */
-    #dim-switch {
+    /* Top-right cluster: fullscreen + the 2D/3D switch. The switch used to be
+       positioned directly; it is now laid out by this row so buttons can be
+       added without recomputing offsets. */
+    #topright {
       position: fixed; top: 18px; right: 24px; z-index: 61;
+      display: flex; align-items: center; gap: 8px;
+    }
+    /* Explicit height on both children: relying on align-items:stretch left the
+       icon-only button at its intrinsic 14px next to the switch's 29px. */
+    #topright > #fs-btn, #topright > #dim-switch { height: 29px; }
+    #dim-switch {
       display: inline-flex; border: 1px solid rgba(200,240,224,.16);
       background: rgba(7,10,12,.6);
       -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
     }
+    #fs-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid rgba(200,240,224,.16);
+      background: rgba(7,10,12,.6);
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      color: rgba(200,240,224,.55); padding: 0 11px;
+      cursor: crosshair; transition: color .15s, border-color .15s;
+    }
+    #fs-btn:hover { color: #c8f0e0; border-color: rgba(200,240,224,.4); }
+    #fs-btn .fs-out { display: none; }
+    #fs-btn.on .fs-in { display: none; }
+    #fs-btn.on .fs-out { display: inline; }
     .dim-seg {
       background: none; border: 0;
       font-family: 'IBM Plex Mono', monospace; font-size: 9.5px;
@@ -186,7 +207,10 @@
       font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: rgba(200,240,224,.28);
     }
     @media (max-width: 767px) {
-      #dim-switch { top: 12px; right: 12px; }
+      #topright { top: 12px; right: 12px; }
+      /* bigger tap target on phones, heights kept equal */
+      #fs-btn { padding: 0 13px; }
+      #topright > #fs-btn, #topright > #dim-switch { height: 34px; }
       #scene-nav { top: 50px; right: 12px; }
       #scene-panel { width: calc(100vw - 24px); max-width: 280px; }
       /* Mobile: keep only the point count, drop fps + scene name. Lift it above
@@ -209,9 +233,15 @@
 <body>
 
   <div id="loading"></div>
-  <div id="dim-switch" role="group" aria-label="2D / 3D viewer">
-    <button class="dim-seg" data-dim="2d" aria-pressed="false">2D</button>
-    <button class="dim-seg active" data-dim="3d" aria-pressed="true">3D</button>
+  <div id="topright">
+    <button id="fs-btn" aria-label="Plein écran">
+      <svg class="fs-in" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7V2h5"/><path d="M13 2h5v5"/><path d="M18 13v5h-5"/><path d="M7 18H2v-5"/></svg>
+      <svg class="fs-out" width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v5H2"/><path d="M18 7h-5V2"/><path d="M13 18v-5h5"/><path d="M2 13h5v5"/></svg>
+    </button>
+    <div id="dim-switch" role="group" aria-label="2D / 3D viewer">
+      <button class="dim-seg" data-dim="2d" aria-pressed="false">2D</button>
+      <button class="dim-seg active" data-dim="3d" aria-pressed="true">3D</button>
+    </div>
   </div>
   <div id="badge">Potree · Point Cloud</div>
   <nav id="scene-nav"></nav>
@@ -249,6 +279,8 @@ const P_STRINGS = {
   en: {
     loading:       'Loading…',
     loadError:     'COPC load error',
+    fullscreen:    'Fullscreen',
+    fullscreenExit:'Exit fullscreen',
     pointCloud:    'Point Cloud',
     scenes:        'Scenes',
     live:          'Live',
@@ -266,6 +298,8 @@ const P_STRINGS = {
   fr: {
     loading:       'Chargement…',
     loadError:     'Erreur de chargement COPC',
+    fullscreen:    'Plein écran',
+    fullscreenExit:'Quitter le plein écran',
     pointCloud:    'Nuage de points',
     scenes:        'Scènes',
     live:          'En ligne',
@@ -295,6 +329,7 @@ function _applyLang() {
     if (btn.id === 'edl-btn')   btn.textContent = PS('edlDepth');
     if (btn.id === 'reset-btn') btn.textContent = PS('resetView');
   });
+  if (window.__renderFsBtn) window.__renderFsBtn();   // title is language-dependent
   if (window.__rebuildSceneMenu) window.__rebuildSceneMenu();
   if (window.__renderDriftToggle3d) window.__renderDriftToggle3d();
 }
@@ -369,7 +404,7 @@ if (isEmbed) {
   // 3D scenes without bouncing back to the 2D gallery. The gallery host still
   // owns the loading veil + badge, so those stay hidden.
   // In embed mode the shell's topbar provides the 2D/3D switch — hide ours.
-  st.textContent = ".embed #badge, .embed #loading, .embed #dim-switch { display: none !important; }";
+  st.textContent = ".embed #badge, .embed #loading, .embed #topright { display: none !important; }";
   document.head.appendChild(st);
 }
 
@@ -1290,6 +1325,33 @@ const fpsEl = document.getElementById("fps-line");
 })();
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
+// ── Fullscreen ──────────────────────────────────────────────────────────────
+// Hidden where the Fullscreen API is unavailable — notably Safari on iPhone,
+// which only allows fullscreen on <video>. Hidden in embed mode too: there the
+// 2D shell wraps us and provides its own control.
+(function () {
+  const btn = document.getElementById('fs-btn');
+  if (!btn) return;
+  const supported = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+  if (!supported) { btn.style.display = 'none'; return; }
+  const isOn = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+  function render() {
+    btn.classList.toggle('on', isOn());
+    const label = PS(isOn() ? 'fullscreenExit' : 'fullscreen');
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+  window.__renderFsBtn = render;
+  btn.addEventListener('click', () => {
+    const el = document.documentElement;
+    if (isOn()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else        (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+  });
+  ['fullscreenchange', 'webkitfullscreenchange'].forEach(
+    ev => document.addEventListener(ev, render));
+  render();
+})();
+
 // Press V to capture the current framing as a SCENES `view` entry. The default
 // view is derived from the .blend camera, which is right in principle but can
 // not know how the scene should be framed for a 3D viewer (different aspect,
