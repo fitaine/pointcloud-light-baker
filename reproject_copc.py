@@ -125,14 +125,31 @@ def auto_align(capture_dir, tiles_dir, max_residual=MAX_ALIGN_RESIDUAL):
     # half its valid cells to overlap), capped at 5000 so big scenes are
     # unchanged. The residual guard below still rejects true misalignments.
     min_overlap = min(5000, max(200, int(0.5 * bval.sum())))
+    # The blend cloud is often literally the merge of THESE tiles, so the two
+    # DEMs come out the same size to within a cell of rounding. The old search
+    # only tried offsets where the blend DEM sat entirely inside the tile DEM —
+    # range(0, W - bW + 1), which is EMPTY as soon as bW >= W — so alignment died
+    # with "no DEM overlap" on exactly the most ordinary case (Carrière de la
+    # Buisse: blend 301 wide, tiles 300). Let the blend DEM overhang the edges
+    # and score only the overlapping region. Margin is a quarter of the cloud,
+    # enough for rounding and a genuinely off-centre crop without exploding the
+    # search; min_overlap below still rejects matches with too little to compare.
+    mx = max(5, int(0.25 * bW))
+    my = max(5, int(0.25 * bH))
     best = None
-    for dx in range(0, W - bW + 1):
-        for dy in range(0, H - bH + 1):
-            sub = rdem[dx:dx+bW, dy:dy+bH]
-            m = bval & (sub > -1e8)
+    for dx in range(-mx, (W - bW) + mx + 1):
+        for dy in range(-my, (H - bH) + my + 1):
+            # Overlapping window, in blend-DEM indices
+            bi0, bi1 = max(0, -dx), min(bW, W - dx)
+            bj0, bj1 = max(0, -dy), min(bH, H - dy)
+            if bi1 <= bi0 or bj1 <= bj0:
+                continue
+            sub = rdem[bi0 + dx:bi1 + dx, bj0 + dy:bj1 + dy]
+            b   = bdem[bi0:bi1, bj0:bj1]
+            m = (b > -1e8) & (sub > -1e8)
             if m.sum() < min_overlap:
                 continue
-            dz = sub[m] - bdem[m]
+            dz = sub[m] - b[m]
             med = np.median(dz)
             err = np.mean(np.abs(dz - med))
             if best is None or err < best[0]:
