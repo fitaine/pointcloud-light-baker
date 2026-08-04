@@ -19,7 +19,8 @@ from urllib.parse import unquote
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-GALLERY_DIR  = os.path.normpath(os.path.join(SCRIPT_DIR, '..', '..', 'test'))
+# The 2D viewer moved test/ → public/lidar/ in the 2026-06 site reorg.
+GALLERY_DIR  = os.path.normpath(os.path.join(SCRIPT_DIR, '..', '..', 'public', 'lidar'))
 POTREE_DIR   = SCRIPT_DIR
 CLOUDS_DIR   = os.path.join(SCRIPT_DIR, 'pointclouds')
 

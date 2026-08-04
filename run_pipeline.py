@@ -481,7 +481,9 @@ def main():
 
     print(f"\n{'━'*64}")
     print(f"  DONE — start the viewer (potree/START VIEWER.bat) and open:")
-    print(f"  http://localhost:8081/?scene={variants[0][2]}")
+    # server.py is the unified dev server: / is the 2D gallery, Potree lives
+    # under /3d/. Without the prefix you land on the gallery, not the viewer.
+    print(f"  http://localhost:8081/3d/?scene={variants[0][2]}")
     print(f"{'━'*64}\n")
 
 
