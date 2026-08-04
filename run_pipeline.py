@@ -272,10 +272,19 @@ def compute_scene_view(capture):
              for i in range(3)]
         n = math.sqrt(sum(c * c for c in d)) or 1.0
         fwd = [c / n for c in d]
-    # aim point: along the view axis, at the distance of the cloud centre
+    # Aim point along the view axis. Its DISTANCE also sets the viewer's orbit
+    # pivot, so prefer the OrbitTarget empty — the artist put it at the subject.
+    # Projected onto the view axis, so the framing is untouched and only the
+    # pivot depth changes. Falls back to the cloud centre for older captures.
     dist = 1500.0
+    with open(tj_path) as f:
+        ot = json.load(f).get("orbit_target")
     meta_path = os.path.join(capture, "cloud_dem_meta.json")
-    if os.path.exists(meta_path):
+    if ot:
+        otl = [ot[i] + off[i] for i in range(3)]
+        d = sum((otl[i] - pos[i]) * fwd[i] for i in range(3))
+        dist = max(200.0, d)
+    elif os.path.exists(meta_path):
         with open(meta_path) as f:
             meta = json.load(f)
         cx = meta["min_xy"][0] + meta["shape"][0] * meta["cell"] / 2 + off[0]

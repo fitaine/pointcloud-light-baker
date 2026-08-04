@@ -380,6 +380,11 @@ if _scene_cam is not None and _scene_cam.data is not None:
 transforms = {
     "camera_angle_x": camera_angle_x,
     "scene_camera": scene_camera,
+    # Orbit centre in blend world coords. The capture orbits it; the VIEWER also
+    # needs it, because its orbit pivot sits at the view's target point — without
+    # this the pivot lands wherever the camera axis happens to cross the cloud
+    # centre, and the scene spins around the wrong place.
+    "orbit_target": [target.x, target.y, target.z],
     "fl_x":   fl_x,
     "fl_y":   fl_x,          # square pixels
     "cx":     RENDER_WIDTH  / 2.0,
