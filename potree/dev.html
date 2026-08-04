@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dev viewer — all scenes</title>
+
+  <link rel="stylesheet" href="Potree_1.8.2/build/potree/potree.css">
+  <link rel="stylesheet" href="Potree_1.8.2/libs/jquery-ui/jquery-ui.min.css">
+  <link rel="stylesheet" href="Potree_1.8.2/libs/openlayers3/ol.css">
+  <link rel="stylesheet" href="Potree_1.8.2/libs/spectrum/spectrum.css">
+  <link rel="stylesheet" href="Potree_1.8.2/libs/jstree/themes/mixed/style.css">
+  <script src="Potree_1.8.2/libs/jquery/jquery-3.1.1.min.js"></script>
+  <script src="Potree_1.8.2/libs/spectrum/spectrum.js"></script>
+  <script src="Potree_1.8.2/libs/jquery-ui/jquery-ui.min.js"></script>
+  <script src="Potree_1.8.2/libs/other/BinaryHeap.js"></script>
+  <script src="Potree_1.8.2/libs/tween/tween.min.js"></script>
+  <script src="Potree_1.8.2/libs/d3/d3.js"></script>
+  <script src="Potree_1.8.2/libs/proj4/proj4.js"></script>
+  <script src="Potree_1.8.2/libs/openlayers3/ol.js"></script>
+  <script src="Potree_1.8.2/libs/i18next/i18next.js"></script>
+  <script src="Potree_1.8.2/libs/jstree/jstree.js"></script>
+  <script src="Potree_1.8.2/libs/three.js/build/three.min.js"></script>
+  <script src="Potree_1.8.2/libs/copc/index.js"></script>
+  <script src="Potree_1.8.2/build/potree/potree.js"></script>
+  <script src="Potree_1.8.2/libs/plasio/js/laslaz.js"></script>
+
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #030405; font-family: 'IBM Plex Mono', monospace; }
+
+    #potree_sidebar_container { display: none !important; }
+    .potree_container         { background: transparent !important; }
+    #potree_render_area       { position: fixed; inset: 0; z-index: 1; }
+    #potree_render_area canvas { cursor: crosshair !important; display: block; }
+
+    #loading {
+      position: fixed; inset: 0; z-index: 200;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+      color: rgba(200,240,224,.45); background: #030405;
+      transition: opacity .6s ease;
+    }
+    #loading.fade { opacity: 0; pointer-events: none; }
+
+    #bar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 18px;
+      background: rgba(3,4,5,.85); backdrop-filter: blur(6px);
+      border-bottom: 1px solid rgba(200,240,224,.08);
+      font-size: 10px; letter-spacing: .12em; color: rgba(200,240,224,.5);
+    }
+    #bar .label { text-transform: uppercase; white-space: nowrap; }
+    #scene-select {
+      flex: 1; max-width: 420px;
+      background: rgba(200,240,224,.05); border: 1px solid rgba(200,240,224,.15);
+      color: rgba(200,240,224,.85); font-family: inherit; font-size: 10px;
+      letter-spacing: .08em; padding: 5px 8px; cursor: pointer;
+    }
+    #scene-select option { background: #0d0f10; }
+    #pts { color: rgba(200,240,224,.3); font-size: 9px; white-space: nowrap; }
+    #error-msg {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      z-index: 300; font-size: 10px; letter-spacing: .1em;
+      color: rgba(255,120,100,.7); display: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loading">loading…</div>
+
+<div id="bar">
+  <span class="label">DEV</span>
+  <select id="scene-select"><option>— loading scenes —</option></select>
+  <span id="pts"></span>
+</div>
+
+<div id="potree_render_area"></div>
+<div id="potree_sidebar_container"></div>
+
+<span id="error-msg"></span>
+
+<script>
+let viewer, pointcloud = null;
+
+// ── Init Potree ────────────────────────────────────────────────────────────
+viewer = new Potree.Viewer(document.getElementById('potree_render_area'));
+viewer.setEDLEnabled(true);
+viewer.setFOV(60);
+viewer.setPointBudget(3_000_000);
+viewer.loadSettingsFromURL();
+viewer.setBackground('black');
+viewer.renderer.outputEncoding = THREE.LinearEncoding;
+
+// ── Load a scene by ID ─────────────────────────────────────────────────────
+function loadScene(id) {
+  document.getElementById('pts').textContent = '';
+  document.getElementById('error-msg').style.display = 'none';
+
+  // Remove existing cloud
+  if (pointcloud) {
+    viewer.scene.removePointCloud(pointcloud);
+    pointcloud = null;
+  }
+
+  const loadEl = document.getElementById('loading');
+  loadEl.classList.remove('fade');
+  loadEl.style.display = 'flex';
+  loadEl.textContent = 'loading…';
+
+  const url = `./pointclouds/${id}.copc.laz?v=${Date.now()}`;
+  Potree.loadPointCloud(url, id, (e) => {
+    pointcloud = e.pointcloud;
+    const mat = pointcloud.material;
+    mat.size          = 0.5;
+    mat.pointSizeType = Potree.PointSizeType.FIXED;
+    mat.shape         = Potree.PointShape.SQUARE;
+    pointcloud.material.activeAttributeName = 'rgba';
+    viewer.scene.addPointCloud(pointcloud);
+    viewer.fitToScreen(0.6);
+
+    const npts = pointcloud.numPoints || 0;
+    if (npts > 0) document.getElementById('pts').textContent = (npts/1e6).toFixed(1) + 'M pts';
+
+    loadEl.classList.add('fade');
+    setTimeout(() => { loadEl.style.display = 'none'; }, 700);
+  });
+}
+
+// ── Populate scene picker from /api/scenes ─────────────────────────────────
+fetch('/api/scenes')
+  .then(r => r.json())
+  .then(scenes => {
+    const sel = document.getElementById('scene-select');
+    sel.innerHTML = '';
+    if (!scenes.length) {
+      sel.innerHTML = '<option>no .copc.laz found in pointclouds/</option>';
+      return;
+    }
+    for (const id of scenes) {
+      const opt = document.createElement('option');
+      opt.value = opt.textContent = id;
+      sel.appendChild(opt);
+    }
+
+    // Load from URL hash if present, otherwise first scene
+    const hash = location.hash.replace('#', '');
+    const initial = scenes.includes(hash) ? hash : scenes[0];
+    sel.value = initial;
+    loadScene(initial);
+
+    sel.addEventListener('change', () => {
+      // Reload the page — Potree hot-swap is unreliable
+      location.href = location.pathname + '#' + sel.value;
+      location.reload();
+    });
+  })
+  .catch(err => {
+    document.getElementById('error-msg').textContent = 'Could not load scene list: ' + err;
+    document.getElementById('error-msg').style.display = 'block';
+  });
+</script>
+</body>
+</html>

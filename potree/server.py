@@ -1,37 +1,73 @@
 #!/usr/bin/env python3
 """
-Range-capable HTTP server for the Potree COPC viewer.
+Unified dev server: gallery at / and Potree viewer at /3d/
 
-Python's built-in http.server ignores Range headers, which breaks the COPC
-JavaScript library — it uses byte-range requests (fetch with Range: bytes=X-Y)
-to read EVLRs and point data chunks from .copc.laz files without downloading
-the full file. Without range support, Copc.create() throws and the viewer
-gets stuck on the loading screen indefinitely.
+Range request support is required for COPC .laz files (the COPC JS library
+uses Range: bytes=X-Y to read chunks without downloading the whole file;
+Python's built-in http.server ignores Range headers and breaks it).
 
-Usage:  python server.py [port]   (default port 8081)
+Routing:
+  /            →  ../test/          (2D gallery)
+  /3d/...      →  ./                (Potree viewer, range-capable)
+  anything else → 404
+
+Usage:  python server.py [port]   (default 8081)
 """
 
-import os, sys, mimetypes
+import os, sys, mimetypes, json
+from urllib.parse import unquote
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+
+SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
+GALLERY_DIR  = os.path.normpath(os.path.join(SCRIPT_DIR, '..', '..', 'test'))
+POTREE_DIR   = SCRIPT_DIR
+CLOUDS_DIR   = os.path.join(SCRIPT_DIR, 'pointclouds')
 
 
 class RangeHTTPRequestHandler(SimpleHTTPRequestHandler):
-    """SimpleHTTPRequestHandler extended with HTTP/1.1 Range request support."""
 
     server_version = "RangeHTTP/1.0"
 
-    # ──────────────────────────────────────────────────────────────────────────
+    def _resolve_path(self):
+        """Return (fs_path, url_tail) with the /3d/ prefix stripped."""
+        url = unquote(self.path.split('?')[0])
+        if url.startswith('/3d/') or url == '/3d':
+            tail = url[4:] or 'index.html'
+            return os.path.join(POTREE_DIR, tail.lstrip('/')), tail
+        else:
+            tail = url.lstrip('/') or 'index.html'
+            return os.path.join(GALLERY_DIR, tail), tail
+
+    def _api_scenes(self):
+        """Return JSON list of all .copc.laz scene IDs in pointclouds/."""
+        scenes = []
+        if os.path.isdir(CLOUDS_DIR):
+            for f in sorted(os.listdir(CLOUDS_DIR)):
+                if f.endswith('.copc.laz'):
+                    scenes.append(f[:-9])  # strip .copc.laz
+        body = json.dumps(scenes).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self._add_cors()
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        path = self.translate_path(self.path.split('?')[0])
-        if os.path.isdir(path):
-            return SimpleHTTPRequestHandler.do_GET(self)
-        self._serve_file(path, send_body=True)
+        url = unquote(self.path.split('?')[0])
+        if url == '/api/scenes':
+            self._api_scenes()
+            return
+        fs_path, _ = self._resolve_path()
+        if os.path.isdir(fs_path):
+            fs_path = os.path.join(fs_path, 'index.html')
+        self._serve_file(fs_path, send_body=True)
 
     def do_HEAD(self):
-        path = self.translate_path(self.path.split('?')[0])
-        if os.path.isdir(path):
-            return SimpleHTTPRequestHandler.do_HEAD(self)
-        self._serve_file(path, send_body=False)
+        fs_path, _ = self._resolve_path()
+        if os.path.isdir(fs_path):
+            fs_path = os.path.join(fs_path, 'index.html')
+        self._serve_file(fs_path, send_body=False)
 
     # ──────────────────────────────────────────────────────────────────────────
     def _serve_file(self, path, send_body=True):
@@ -144,17 +180,12 @@ class RangeHTTPRequestHandler(SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8081
 
-    # cd to the directory containing this script (potree/)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(script_dir)
-
     print()
     print("─" * 62)
-    print("  LiDAR Point Cloud Viewer — Potree (range-capable server)")
-    print(f"  http://localhost:{port}/")
-    print(f"  http://localhost:{port}/?scene=chamechaude-lit")
-    print(f"  http://localhost:{port}/?scene=grande-motte-lit")
-    print(f"  http://localhost:{port}/?test=1   ← Potree sample COPC")
+    print("  LiDAR unified dev server")
+    print(f"  Gallery  →  http://localhost:{port}/")
+    print(f"  Potree   →  http://localhost:{port}/3d/")
+    print(f"  Potree   →  http://localhost:{port}/3d/?scene=chamechaude-lit")
     print("─" * 62)
     print()
 

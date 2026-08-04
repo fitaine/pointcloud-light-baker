@@ -34,7 +34,7 @@
   <style>
     /* ── Reset ─────────────────────────────────────────────────────────── */
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #07080a; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #030405; }
 
     /* ── Hide Potree sidebar + fix canvas ──────────────────────────────── */
     #potree_sidebar_container         { display: none !important; }
@@ -49,10 +49,27 @@
       font-family: 'IBM Plex Mono', monospace;
       font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
       color: rgba(200,240,224,.45);
-      background: #07080a;
+      background: #030405;
       transition: opacity .6s ease;
     }
     #loading.fade { opacity: 0; pointer-events: none; }
+
+    /* ── 2D / 3D dimension switch — top right (matches the 2D viewer) ─────── */
+    #dim-switch {
+      position: fixed; top: 18px; right: 24px; z-index: 61;
+      display: inline-flex; border: 1px solid rgba(200,240,224,.16);
+      background: rgba(7,10,12,.6);
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    }
+    .dim-seg {
+      background: none; border: 0;
+      font-family: 'IBM Plex Mono', monospace; font-size: 9.5px;
+      letter-spacing: .16em; text-transform: uppercase; color: rgba(200,240,224,.55);
+      padding: 7px 13px; cursor: crosshair; transition: color .15s, background .15s;
+    }
+    .dim-seg + .dim-seg { border-left: 1px solid rgba(200,240,224,.16); }
+    .dim-seg:hover { color: #c8f0e0; }
+    .dim-seg.active { color: #06080a; background: #c8f0e0; cursor: default; }
 
     /* ── Badge ──────────────────────────────────────────────────────────── */
     #badge {
@@ -104,25 +121,78 @@
       background: rgba(200,240,224,.06);
     }
 
-    /* ── Scene nav — top right ──────────────────────────────────────────── */
+    /* ── Scene menu — top right ─────────────────────────────────────────── */
     #scene-nav {
-      position: fixed; top: 20px; right: 24px; z-index: 60;
-      display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
+      position: fixed; top: 58px; right: 24px; z-index: 60;
       font-family: 'IBM Plex Mono', monospace;
     }
-    #scene-nav a {
-      font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
-      color: rgba(200,240,224,.45); text-decoration: none;
+    /* Collapsed pill */
+    #scene-pill {
+      display: none; align-items: center; gap: 7px;
+      background: rgba(7,10,12,.9); border: 1px solid rgba(200,240,224,.16);
+      color: rgba(200,240,224,.65);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase;
+      padding: 7px 12px; cursor: crosshair;
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      transition: border-color .15s, color .15s;
+    }
+    #scene-pill:hover { border-color: rgba(200,240,224,.5); color: rgba(200,240,224,.95); }
+    #scene-pill .ct { color: #c8f0e0; }
+    #scene-nav.collapsed #scene-pill { display: inline-flex; }
+    #scene-nav.collapsed #scene-panel { display: none; }
+    /* Expanded panel */
+    #scene-panel {
+      width: 250px; background: rgba(7,10,12,.92);
       border: 1px solid rgba(200,240,224,.14);
-      padding: 4px 12px; cursor: crosshair;
-      transition: border-color .15s, color .15s, background .15s;
+      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     }
-    #scene-nav a:hover {
-      border-color: rgba(200,240,224,.5); color: rgba(200,240,224,.9);
+    .sm-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 11px 12px; border-bottom: 1px solid rgba(200,240,224,.1);
     }
-    #scene-nav a.current {
-      border-color: rgba(200,240,224,.45); color: rgba(200,240,224,.95);
-      background: rgba(200,240,224,.06);
+    .sm-head .lbl { font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: rgba(200,240,224,.45); }
+    .sm-head .cnt { margin-left: auto; font-size: 8.5px; letter-spacing: .12em; color: rgba(200,240,224,.32); }
+    .sm-head .cnt b { color: #c8f0e0; font-weight: 400; }
+    .sm-close { background: none; border: 0; color: rgba(200,240,224,.4); cursor: crosshair; font-size: 13px; line-height: 1; padding: 0 2px; }
+    .sm-close:hover { color: rgba(200,240,224,.9); }
+    .sm-row {
+      display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
+      background: none; border: 0; border-left: 2px solid transparent;
+      padding: 9px 10px 9px 12px; cursor: crosshair;
+      font-family: 'IBM Plex Mono', monospace;
+      transition: background .15s, border-color .15s;
+    }
+    .sm-row:hover { background: rgba(200,240,224,.05); }
+    .sm-row.current { background: rgba(200,240,224,.07); border-left-color: #c8f0e0; cursor: default; }
+    .sm-idx { font-size: 11px; letter-spacing: .1em; color: rgba(200,240,224,.32); width: 16px; flex: none; }
+    .sm-name { font-size: 12px; letter-spacing: .08em; color: rgba(200,240,224,.62); text-transform: uppercase; display: block; }
+    .sm-row.current .sm-name { color: #c8f0e0; }
+    .sm-row:hover .sm-name { color: rgba(200,240,224,.9); }
+    .sm-sub { font-size: 9.5px; letter-spacing: .06em; color: rgba(200,240,224,.3); text-transform: uppercase; display: block; margin-top: 2px; }
+    .sm-tag { margin-left: auto; font-size: 8.5px; letter-spacing: .14em; color: rgba(200,240,224,.4); display: flex; align-items: center; gap: 4px; flex: none; }
+    .sm-row:not(.current) .sm-tag { opacity: 0; transition: opacity .15s; }
+    .sm-row:not(.current):hover .sm-tag { opacity: .55; }
+    .sm-divider { height: 1px; background: rgba(200,240,224,.08); margin: 4px 12px; }
+    .sm-soon {
+      display: flex; align-items: center; gap: 11px;
+      padding: 9px 10px 9px 12px; border-left: 2px solid transparent;
+      opacity: .42; cursor: not-allowed;
+    }
+    .sm-soon .bar { height: 7px; border-radius: 2px; background: rgba(200,240,224,.14); flex: 1; }
+    .sm-soon .sm-tag { margin-left: 10px; flex: none; }
+    .sm-foot {
+      padding: 9px 12px 11px; border-top: 1px solid rgba(200,240,224,.08);
+      font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: rgba(200,240,224,.28);
+    }
+    @media (max-width: 767px) {
+      #dim-switch { top: 12px; right: 12px; }
+      #scene-nav { top: 50px; right: 12px; }
+      #scene-panel { width: calc(100vw - 24px); max-width: 280px; }
+      /* Mobile: keep only the point count, drop fps + scene name. Lift it above
+         the drift toggle (bottom-right corner) so they don't overlap. */
+      #telemetry { bottom: 56px !important; right: 14px !important; }
+      #telemetry #fps-line, #telemetry #scene-line { display: none; }
     }
 
     /* ── Telemetry — bottom right ───────────────────────────────────────── */
@@ -138,7 +208,11 @@
 </head>
 <body>
 
-  <div id="loading">Loading…</div>
+  <div id="loading"></div>
+  <div id="dim-switch" role="group" aria-label="2D / 3D viewer">
+    <button class="dim-seg" data-dim="2d" aria-pressed="false">2D</button>
+    <button class="dim-seg active" data-dim="3d" aria-pressed="true">3D</button>
+  </div>
   <div id="badge">Potree · Point Cloud</div>
   <nav id="scene-nav"></nav>
 
@@ -170,11 +244,77 @@
   </div>
 
 <script>
+// ── Bilingual strings ───────────────────────────────────────────────────────
+const P_STRINGS = {
+  en: {
+    loading:       'Loading…',
+    loadError:     'COPC load error',
+    pointCloud:    'Point Cloud',
+    scenes:        'Scenes',
+    live:          'Live',
+    viewing:       '◉ Viewing',
+    soon:          '⧗ Soon',
+    moreScenes:    '+ More massifs in preparation',
+    elevMode:      '⬡ Elevation mode',
+    edlDepth:      '⬡ EDL depth',
+    resetView:     '⊹ Reset view',
+    driftOn:       'Ambient motion on — click to disable',
+    driftOff:      'Ambient motion off — click to enable',
+    showScenes:    'Show scenes',
+    collapseMenu:  'Collapse menu',
+  },
+  fr: {
+    loading:       'Chargement…',
+    loadError:     'Erreur de chargement COPC',
+    pointCloud:    'Nuage de points',
+    scenes:        'Scènes',
+    live:          'En ligne',
+    viewing:       '◉ En cours',
+    soon:          '⧗ Bientôt',
+    moreScenes:    '+ D\'autres massifs en préparation',
+    elevMode:      '⬡ Mode altitude',
+    edlDepth:      '⬡ Profondeur EDL',
+    resetView:     '⊹ Vue initiale',
+    driftOn:       'Mouvement ambiant activé — cliquer pour désactiver',
+    driftOff:      'Mouvement ambiant désactivé — cliquer pour activer',
+    showScenes:    'Afficher les scènes',
+    collapseMenu:  'Réduire le menu',
+  }
+};
+const _urlLang = new URLSearchParams(location.search).get('lang');
+let P_LANG = (_urlLang === 'fr' || _urlLang === 'en') ? _urlLang : 'en';
+function PS(key) { return (P_STRINGS[P_LANG] || P_STRINGS.en)[key] || P_STRINGS.en[key] || key; }
+
+function _applyLang() {
+  const loadEl = document.getElementById('loading');
+  if (loadEl && !loadEl.classList.contains('fade')) loadEl.textContent = PS('loading');
+  // badge shows the scene name, not the generic "Point Cloud" label
+  // (SCENE_LABEL is already set; only update if it's still the placeholder)
+  document.querySelectorAll('#ui button').forEach(btn => {
+    if (btn.id === 'color-btn') btn.textContent = PS('elevMode');
+    if (btn.id === 'edl-btn')   btn.textContent = PS('edlDepth');
+    if (btn.id === 'reset-btn') btn.textContent = PS('resetView');
+  });
+  if (window.__rebuildSceneMenu) window.__rebuildSceneMenu();
+  if (window.__renderDriftToggle3d) window.__renderDriftToggle3d();
+}
+
+// Listen for lang change from the parent shell
+window.addEventListener('message', e => {
+  if (e.data && e.data.type === 'set-lang' && (e.data.lang === 'fr' || e.data.lang === 'en')) {
+    P_LANG = e.data.lang;
+    _applyLang();
+  }
+});
+
 // ── Scene config ────────────────────────────────────────────────────────────
 // Change SCENE_ID to switch between loaded scenes.
 // The folder must exist under ./pointclouds/<SCENE_ID>/metadata.json
 // Files: ./pointclouds/<key>.copc.laz  (generated by convert_to_copc.bat)
 const SCENES = {
+  "2023-11-01-plateau-de-bure-interferometre-detail": {"label": "2023-11-01_Plateau de Bure - Interferometre \u00b7 Detail", "view": {"position": [930529.4, 6396770.81, 2682.14], "target": [930516.51, 6396990.49, 2583.24], "fov": 39.6}},
+  "2023-11-01-plateau-de-bure-interferometre-test-detail": {"label": "2023-11-01_Plateau de Bure - Interferometre-test \u00b7 Detail", "view": {"position": [930529.4, 6396770.81, 2682.14], "target": [930516.51, 6396990.49, 2583.24], "fov": 39.6}},
+  "2026-03-09-aravis-test-detail": {"label": "2026-03-09_Aravis-test \u00b7 Detail"},
   "2026-02-21-lac-des-milles-vaches-test-detail": {"label": "2026-02-21_Lac des Milles vaches-test \u00b7 Detail", "volume": "cube-001", "view": {"position": [995523.77, 6484486.73, 2490.57], "target": [995393.46, 6484609.56, 2401.51], "fov": 39.6}},
   "2023-09-19-mont-aiguille-2-detail": {"label": "Mont Aiguille \u00b7 Anneau de nuage", "volume": "anneau-de-nuage", "view": {"position": [914880.15, 6422226.87, 1820.77], "target": [901509.26, 6418970.76, 1931.62], "fov": 10.29}},
   "2023-11-10-grande-motte-detail": "2023-11-10_Grande Motte · Detail",
@@ -200,6 +340,7 @@ const SCENES = {
       fov: 55,
     },
   },
+  "pont-de-longchaumois": {"label": "Pont de Longchaumois", "view": {"position": [923047.29, 6601032.38, 579.84], "target": [922870.47, 6600796.95, 477.07], "fov": 23.92}},
 };
 
 // Entries are either "Label" or { label, view } — view = the scene's 2D
@@ -218,24 +359,173 @@ function sceneNoCloud(id) {
   return !!(v && typeof v === "object" && v.nocloud);
 }
 
+// Embed mode (?embed=1) — viewer runs inside the 2D gallery's fullscreen
+// iframe: hide the scene menu and badge, the host page provides the chrome
+// (← 2D return chip). Everything else (sliders, EDL, volumes) stays.
+const isEmbed = !!new URLSearchParams(location.search).get("embed");
+if (isEmbed) {
+  document.documentElement.classList.add("embed");
+  const st = document.createElement("style");
+  // In embed mode the gallery provides its own loading overlay — hide ours.
+  // Keep the scene menu visible in embed — it's how the visitor hops between
+  // 3D scenes without bouncing back to the 2D gallery. The gallery host still
+  // owns the loading veil + badge, so those stay hidden.
+  // In embed mode the shell's topbar provides the 2D/3D switch — hide ours.
+  st.textContent = ".embed #badge, .embed #loading, .embed #dim-switch { display: none !important; }";
+  document.head.appendChild(st);
+}
+
+function notifyLoaded() {
+  if (isEmbed) window.parent.postMessage({ type: 'potree-loaded' }, '*');
+}
+
 // Pick scene from URL ?scene=chamechaude, or default to first
 const urlScene = new URLSearchParams(location.search).get("scene");
-const SCENE_ID = (urlScene && SCENES[urlScene]) ? urlScene : Object.keys(SCENES)[0];
+// Default (bare load, no ?scene=) → first published cloud, never a local-only
+// test scene. Keep this id in sync with PUBLISHED[0] below.
+const DEFAULT_SCENE = "2023-09-19-mont-aiguille-2-detail";
+const SCENE_ID = (urlScene && SCENES[urlScene]) ? urlScene : DEFAULT_SCENE;
 const SCENE_LABEL = sceneLabel(SCENE_ID);
 
-document.title = SCENE_LABEL + " — Point Cloud";
+document.title = SCENE_LABEL + " — " + PS('pointCloud');
 document.getElementById("badge").textContent = "Potree · " + SCENE_LABEL;
+_applyLang(); // populate loading text, UI buttons
 document.getElementById("scene-line").textContent = SCENE_LABEL.toUpperCase();
 
-// ── Scene nav — one link per scene, current highlighted ─────────────────────
-const navEl = document.getElementById("scene-nav");
-for (const id of Object.keys(SCENES)) {
-  const a = document.createElement("a");
-  a.href = "?scene=" + id;
-  a.textContent = sceneLabel(id);
-  if (id === SCENE_ID) a.classList.add("current");
-  navEl.appendChild(a);
+// ── Scene menu — curated list of published clouds only ──────────────────────
+// SCENES (above) holds every cloud we've ever generated, most of them local
+// test scenes with no data on the server. The menu shows only what's actually
+// published & live, in display order, with a name + subtitle. Add a scene here
+// once its .copc.laz is deployed under ./pointclouds/.
+const PUBLISHED = [
+  { id: "pont-de-longchaumois",                           name: "Pont de Longchaumois", sub: "La Bienne, Jura" },
+  { id: "2023-09-19-mont-aiguille-2-detail",              name: "Mont Aiguille",   sub: "Anneau de nuage" },
+  { id: "2026-03-09-chamechaude-detail",                  name: "Chamechaude",     sub: "Massif de la Chartreuse" },
+  { id: "2023-11-01-plateau-de-bure-interferometre-detail", name: "Plateau de Bure", sub: "Interféromètre IRAM" },
+];
+const SOON_COUNT      = 3;                       // ghost "soon" rows shown below
+const MENU_PREF_KEY   = "lidar-scene-menu-collapsed";
+const SOON_BAR_WIDTHS = ["64%", "48%", "56%", "52%", "60%"];
+
+function _buildSceneMenuHTML() {
+  const pill = document.getElementById("scene-pill") || document.createElement("button");
+  pill.id = "scene-pill";
+  pill.setAttribute("aria-label", PS('showScenes'));
+  pill.innerHTML = '<span style="font-size:11px;line-height:1">▾</span> ' + PS('scenes') + ' ' +
+                   '<span class="ct">' + PUBLISHED.length + '</span>';
+
+  const panel = document.getElementById("scene-panel") || document.createElement("div");
+  panel.id = "scene-panel";
+
+  let html = '<div class="sm-head">' +
+               '<span class="lbl">Point clouds</span>' +
+               '<span class="cnt"><b>' + PUBLISHED.length + '</b> ' + PS('live') + '</span>' +
+               '<button class="sm-close" aria-label="' + PS('collapseMenu') + '">✕</button>' +
+             '</div>';
+
+  PUBLISHED.forEach((s, i) => {
+    const idx     = String(i + 1).padStart(2, "0");
+    const current = s.id === SCENE_ID;
+    html += '<button class="sm-row' + (current ? " current" : "") + '"' +
+              ' data-scene="' + s.id + '"' + (current ? " disabled" : "") + '>' +
+              '<span class="sm-idx">' + idx + '</span>' +
+              '<span><span class="sm-name">' + s.name + '</span>' +
+              '<span class="sm-sub">' + s.sub + '</span></span>' +
+              '<span class="sm-tag">' + (current ? PS('viewing') : "→") + '</span>' +
+            '</button>';
+  });
+
+  if (SOON_COUNT > 0) {
+    html += '<div class="sm-divider"></div>';
+    for (let i = 0; i < SOON_COUNT; i++) {
+      const idx = String(PUBLISHED.length + i + 1).padStart(2, "0");
+      const w   = SOON_BAR_WIDTHS[i % SOON_BAR_WIDTHS.length];
+      html += '<div class="sm-soon">' +
+                '<span class="sm-idx">' + idx + '</span>' +
+                '<span class="bar" style="width:' + w + '"></span>' +
+                '<span class="sm-tag">' + PS('soon') + '</span>' +
+              '</div>';
+    }
+  }
+
+  html += '<div class="sm-foot">' + PS('moreScenes') + '</div>';
+  panel.innerHTML = html;
+  return { pill, panel };
 }
+
+(function buildSceneMenu() {
+  const navEl = document.getElementById("scene-nav");
+  navEl.innerHTML = "";
+
+  const { pill, panel } = _buildSceneMenuHTML();
+  panel.innerHTML = panel.innerHTML; // already set by _buildSceneMenuHTML
+
+  navEl.appendChild(pill);
+  navEl.appendChild(panel);
+
+  // Expose for lang switch rebuild (text only, keeps collapsed state)
+  window.__rebuildSceneMenu = function() {
+    _buildSceneMenuHTML(); // updates pill + panel in place via getElementById
+    // re-wire close button
+    const cl = document.querySelector(".sm-close");
+    if (cl) cl.addEventListener("click", () => setCollapsed(true));
+    // re-wire scene rows
+    document.querySelectorAll(".sm-row[data-scene]").forEach(row => {
+      row.addEventListener("click", function() { _switchScene(this.dataset.scene); });
+    });
+  };
+
+  // Collapse / expand — default open on desktop, collapsed on mobile;
+  // a manual toggle is remembered across scenes via localStorage.
+  const isMobile = window.matchMedia("(max-width: 767px)").matches;
+  let collapsed;
+  try {
+    const pref = localStorage.getItem(MENU_PREF_KEY);
+    collapsed = pref === null ? isMobile : pref === "1";
+  } catch (e) { collapsed = isMobile; }
+  function setCollapsed(v) {
+    navEl.classList.toggle("collapsed", v);
+    try { localStorage.setItem(MENU_PREF_KEY, v ? "1" : "0"); } catch (e) {}
+  }
+  setCollapsed(collapsed);
+
+  pill.addEventListener("click", () => setCollapsed(false));
+  panel.querySelector(".sm-close").addEventListener("click", () => setCollapsed(true));
+
+  // Named function so __rebuildSceneMenu can re-wire after a lang rebuild.
+  function _switchScene(id) {
+    if (isEmbed) {
+      window.parent.postMessage({ type: "potree-switch", scene: id }, "*");
+    } else {
+      const ld = document.getElementById("loading");
+      if (ld) { ld.classList.remove("fade"); ld.textContent = PS('loading'); }
+      const p = new URLSearchParams(location.search);
+      p.set("scene", id);
+      setTimeout(() => { location.search = p.toString(); }, 80);
+    }
+  }
+  window._switchScene = _switchScene;
+
+  panel.querySelectorAll(".sm-row[data-scene]").forEach(row => {
+    if (row.classList.contains("current")) return;
+    row.addEventListener("click", () => _switchScene(row.getAttribute("data-scene")));
+  });
+})();
+
+// ── 2D / 3D header switch ─────────────────────────────────────────────────────
+// "2D" leaves the point cloud: when embedded in the gallery it asks the host to
+// close the overlay (returns to exactly where the visitor left the 2D map);
+// standalone, it navigates to the 2D site root. "3D" is the current view.
+(function () {
+  const TWO_D_URL = "/";   // 2D gallery lives at the site root in production
+  document.querySelectorAll("#dim-switch .dim-seg").forEach(seg => {
+    seg.addEventListener("click", () => {
+      if (seg.dataset.dim !== "2d") return;   // "3D" is already active
+      if (isEmbed) window.parent.postMessage({ type: "potree-back" }, "*");
+      else         location.href = TWO_D_URL;
+    });
+  });
+})();
 
 // ── Potree viewer ────────────────────────────────────────────────────────────
 window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
@@ -243,7 +533,7 @@ window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"))
 viewer.setEDLEnabled(true);
 viewer.setFOV(55);
 viewer.setPointBudget(5_000_000);
-viewer.setBackground("none");  // transparent — body CSS #07080a shows through
+viewer.setBackground("none");  // transparent — body CSS #030405 shows through
 
 // ── Color space ──────────────────────────────────────────────────────────────
 // Our baked colors are already sRGB-encoded uint8.
@@ -251,7 +541,7 @@ viewer.setBackground("none");  // transparent — body CSS #07080a shows through
 // We want NO extra gamma at the renderer output — the browser/OS will
 // interpret the framebuffer values as sRGB natively, which is correct.
 const r = viewer.renderer;
-r.setClearColor(0x07080a, 1);
+r.setClearColor(0x030405, 1);
 if (typeof THREE !== "undefined") {
   if (r.outputColorSpace !== undefined) {
     // Three.js r152+ API
@@ -302,18 +592,49 @@ window.addEventListener("unhandledrejection", (ev) => {
 const urlTest = new URLSearchParams(location.search).get("test");
 // Cache-buster: bump when a .copc.laz is rebuilt under the same name —
 // Chrome caches range-request chunks even across hard refreshes.
-const CLOUD_VERSION = "18";
+const CLOUD_VERSION = "34";
 const CLOUD_URL = urlTest
   ? "./Potree_1.8.2/pointclouds/lion_takanawa.copc.laz"
   : `./pointclouds/${SCENE_ID}.copc.laz?v=${CLOUD_VERSION}`;
 const CLOUD_LABEL = urlTest ? "lion (test)" : SCENE_LABEL;
 console.log("[Potree] Loading:", CLOUD_URL);
 
+// ── Cloud-ring preload ──────────────────────────────────────────────────────
+// Kick the ring's volume fetches off NOW, before Potree's heavy COPC range
+// requests below saturate the connection pool. initVolume() (far below) awaits
+// these promises instead of fetching.
+//
+// The raw .bin is huge (~238 MB) and must download IN FULL before the ring can
+// render — online that always loses the race to the point cloud (which streams
+// progressively via Range requests). The .bin is extremely sparse though, so we
+// ship a gzip of it (~1.3 MB, ~180×) and inflate it in-browser. Falls back to
+// the raw .bin if the .gz is missing or DecompressionStream is unsupported.
+async function _fetchVolumeBuf(id) {
+  const base = `volumes/${id}`;
+  if (typeof DecompressionStream === 'function') {
+    try {
+      const r = await fetch(`${base}.bin.gz?v=${CLOUD_VERSION}`, { priority: 'high' });
+      if (r.ok && r.body) {
+        const stream = r.body.pipeThrough(new DecompressionStream('gzip'));
+        return await new Response(stream).arrayBuffer();
+      }
+    } catch (e) { console.warn('[Volume] .gz path failed, falling back to .bin:', e); }
+  }
+  return (await fetch(`${base}.bin?v=${CLOUD_VERSION}`, { priority: 'high' })).arrayBuffer();
+}
+const _volId = sceneVolume(SCENE_ID);
+const _volPreload = _volId ? {
+  id:   _volId,
+  meta: fetch(`volumes/${_volId}.json?v=${CLOUD_VERSION}`, { priority: 'high' }).then(r => r.json()),
+  buf:  _fetchVolumeBuf(_volId),
+} : null;
+
 if (sceneNoCloud(SCENE_ID)) {
   // Volume-only scene — no point cloud, fade loading immediately then set view
   const loadEl = document.getElementById("loading");
   loadEl.classList.add("fade");
   setTimeout(() => { loadEl.style.display = "none"; }, 700);
+  notifyLoaded();
   document.getElementById("ui").classList.add("visible");
   document.getElementById("telemetry").classList.add("visible");
   document.getElementById("pts-line").textContent = "volume only";
@@ -375,6 +696,8 @@ if (sceneNoCloud(SCENE_ID)) {
       const factor = Math.exp(e.deltaY * ZOOM_SPEED);
       view.radius  = Math.max(100, Math.min(30000, view.radius * factor));
     }, { passive: false, capture: true });
+
+    initTouchControls();
   }, 100);
 } else {
   Potree.loadPointCloud(
@@ -403,16 +726,227 @@ if (sceneNoCloud(SCENE_ID)) {
           (npts / 1e6).toFixed(1) + "M pts";
       }
 
-      // Hide loading overlay
+      // Hide loading overlay — but only once points are actually on screen.
+      // This callback fires when the COPC *root* is parsed; the octree nodes
+      // still stream in for several seconds afterwards. Revealing now shows a
+      // black scene (and in embed mode lifts the gallery's host veil early via
+      // notifyLoaded). Instead poll until enough visible points have rendered,
+      // with a hard timeout so it can never hang.
       const loadEl = document.getElementById("loading");
-      loadEl.classList.add("fade");
-      setTimeout(() => { loadEl.style.display = "none"; }, 700);
+      let _revealed = false;
+      const _t0 = performance.now();
+      function _reveal() {
+        if (_revealed) return;
+        _revealed = true;
+        loadEl.classList.add("fade");
+        setTimeout(() => { loadEl.style.display = "none"; }, 700);
+        notifyLoaded();
+      }
+      function _waitForPoints() {
+        if (_revealed) return;
+        let loaded = 0;
+        const vn = pointcloud.visibleNodes || [];
+        for (const n of vn) loaded += (n.getNumPoints ? n.getNumPoints() : (n.numPoints || 0));
+        if (loaded > 120000 || performance.now() - _t0 > 8000) _reveal();
+        else requestAnimationFrame(_waitForPoints);
+      }
+      requestAnimationFrame(_waitForPoints);
 
       document.getElementById("ui").classList.add("visible");
       document.getElementById("telemetry").classList.add("visible");
+
+      initTouchControls();
     }
   );
 }
+
+// ── Mobile touch controls ─────────────────────────────────────────────────────
+// Potree's EarthControls is mouse-only — no pan, sluggish pinch on mobile.
+// We intercept all touch events before Potree sees them and drive the view
+// directly: 1 finger = orbit, 2 fingers = pinch-zoom + pan.
+function initTouchControls() {
+  const canvas = viewer.renderer.domElement;
+  const view   = viewer.scene.view;
+
+  const ORBIT_SPEED = 0.006;
+  const PAN_SPEED   = 0.0012;
+  const ZOOM_SPEED  = 0.010;   // pinch sensitivity — full pinch ≈ 10x zoom
+
+  let _t = {};   // active touches keyed by identifier
+
+  function _eat(e) { e.stopPropagation(); e.preventDefault(); }
+
+  function _midpoint(a, b) {
+    return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+  }
+  function _dist(a, b) {
+    const dx = a.clientX - b.clientX, dy = a.clientY - b.clientY;
+    return Math.sqrt(dx*dx + dy*dy);
+  }
+
+  // Re-place the camera so it keeps looking at `pivot` from the current
+  // yaw/pitch/radius. Without this, changing yaw/pitch spins the camera in
+  // place instead of orbiting around the object.
+  function _reanchor(pivot) {
+    const dir = view.direction.clone().multiplyScalar(-view.radius);
+    view.position.copy(pivot).add(dir);
+  }
+
+  canvas.addEventListener('touchstart', e => {
+    _eat(e);
+    for (const t of e.changedTouches) _t[t.identifier] = { clientX: t.clientX, clientY: t.clientY };
+  }, { passive: false, capture: true });
+
+  canvas.addEventListener('touchmove', e => {
+    _eat(e);
+    const ids = Object.keys(_t);
+    const cur = {};
+    for (const t of e.changedTouches) cur[t.identifier] = t;
+
+    if (ids.length === 1) {
+      // Single finger → orbit around the pivot
+      const id = ids[0];
+      const prev = _t[id];
+      const next = cur[id] || prev;
+      const dx = next.clientX - prev.clientX;
+      const dy = next.clientY - prev.clientY;
+      const pivot = view.getPivot();
+      view.yaw   -= dx * ORBIT_SPEED;
+      view.pitch  = Math.max(-Math.PI / 2 + 0.05,
+                    Math.min(-0.05, view.pitch - dy * ORBIT_SPEED));
+      _reanchor(pivot);
+      _t[id] = { clientX: next.clientX, clientY: next.clientY };
+
+    } else if (ids.length === 2) {
+      // Two fingers → pinch-zoom toward pivot + pan
+      const [id0, id1] = ids;
+      const p0prev = _t[id0], p1prev = _t[id1];
+      const p0cur  = cur[id0] || p0prev;
+      const p1cur  = cur[id1] || p1prev;
+
+      const pivot = view.getPivot();
+
+      // Pinch zoom — move the camera toward/away from the pivot
+      const prevDist = _dist(p0prev, p1prev);
+      const curDist  = _dist(p0cur,  p1cur);
+      if (prevDist > 1 && Math.abs(curDist - prevDist) > 0.5) {
+        const factor = Math.exp((prevDist - curDist) * ZOOM_SPEED);
+        view.radius = Math.max(50, Math.min(50000, view.radius * factor));
+      }
+
+      // Pan — translate the pivot (and camera with it) in the ground plane
+      const prevMid = _midpoint(p0prev, p1prev);
+      const curMid  = _midpoint(p0cur,  p1cur);
+      const dx = curMid.x - prevMid.x;
+      const dy = curMid.y - prevMid.y;
+      const yaw = view.yaw;
+      const pan = view.radius * PAN_SPEED;
+      pivot.x += (-Math.cos(yaw) * dx + Math.sin(yaw) * dy) * pan;
+      pivot.y += (-Math.sin(yaw) * dx - Math.cos(yaw) * dy) * pan;
+
+      _reanchor(pivot);
+
+      _t[id0] = { clientX: p0cur.clientX, clientY: p0cur.clientY };
+      _t[id1] = { clientX: p1cur.clientX, clientY: p1cur.clientY };
+    }
+  }, { passive: false, capture: true });
+
+  canvas.addEventListener('touchend', e => {
+    _eat(e);
+    for (const t of e.changedTouches) delete _t[t.identifier];
+  }, { passive: false, capture: true });
+
+  canvas.addEventListener('touchcancel', e => {
+    _eat(e);
+    _t = {};
+  }, { passive: false, capture: true });
+}
+
+// ── Idle drift ───────────────────────────────────────────────────────────────
+// After 2 s without interaction, slowly orbit the camera clockwise around the
+// pivot — same motion as a gentle circular mouse drag. Eases in over a few
+// seconds so the start is imperceptible. Only a deliberate control input
+// (click/drag, scroll, key) stops it — bare mouse movement does NOT, so the
+// drift keeps going while the cursor just hovers or moves over the scene.
+const IDLE_DELAY_MS  = 2000;
+const DRIFT_EASE_MS  = 4000;     // ramp-up duration after the idle delay
+const DRIFT_YAW_RPS  = 0.020;    // rad/s — full turn in ~5.2 min
+const DRIFT_BOB_AMP  = 0.008;    // rad — subtle pitch bob echoing the circle
+const DRIFT_BOB_HZ   = 0.05;     // bob cycles per second
+
+const DRIFT_PREF_KEY = 'lidar-drift-off';   // shared with the 2D viewer (same origin)
+function _driftDisabled() { try { return localStorage.getItem(DRIFT_PREF_KEY) === '1'; } catch (e) { return false; } }
+
+let _lastInteract = performance.now();
+function _markInteract() { _lastInteract = performance.now(); }
+// Note: 'mousemove' / 'touchmove' are intentionally excluded — moving the
+// cursor should not interrupt the drift; only a press/scroll/key does.
+['mousedown', 'wheel', 'touchstart', 'keydown']
+  .forEach(t => window.addEventListener(t, _markInteract, { capture: true, passive: true }));
+
+let _driftPrevT = performance.now();
+(function driftLoop() {
+  requestAnimationFrame(driftLoop);
+  const now = performance.now();
+  const dt  = Math.min(0.1, (now - _driftPrevT) / 1000);
+  _driftPrevT = now;
+
+  const idleFor = now - _lastInteract;
+  if (idleFor < IDLE_DELAY_MS || !viewer.scene || _driftDisabled()) return;
+
+  const k = Math.min(1, (idleFor - IDLE_DELAY_MS) / DRIFT_EASE_MS);  // ease-in
+  const view  = viewer.scene.view;
+  const pivot = view.getPivot();
+
+  view.yaw  -= DRIFT_YAW_RPS * k * dt;
+  view.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(-0.05,
+    view.pitch + Math.cos(now / 1000 * DRIFT_BOB_HZ * 2 * Math.PI)
+               * DRIFT_BOB_AMP * k * dt));
+
+  // keep looking at the pivot — orbit, not spin-in-place
+  const dir = view.direction.clone().multiplyScalar(-view.radius);
+  view.position.copy(pivot).add(dir);
+})();
+
+// ── Discreet motion on/off toggle ────────────────────────────────────────────
+// Disables the idle drift entirely. Preference is shared with the 2D viewer via
+// localStorage (same origin), so toggling here also affects the 2D drift.
+(function () {
+  const css = document.createElement('style');
+  css.textContent = `
+    #drift-toggle {
+      position: fixed; right: 24px; bottom: 80px; z-index: 100000;
+      width: 30px; height: 30px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(8,12,16,.45); border: 1px solid rgba(255,255,255,.14);
+      color: rgba(255,255,255,.55); font-size: 11px; line-height: 1;
+      cursor: pointer; opacity: .35; transition: opacity .2s, color .2s, border-color .2s;
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); user-select: none;
+    }
+    #drift-toggle:hover { opacity: 1; color: #c8f0e0; border-color: rgba(200,240,224,.5); }
+    @media (max-width: 767px) { #drift-toggle { right: 12px; bottom: 12px; } }
+  `;
+  document.head.appendChild(css);
+
+  const btn = document.createElement('button');
+  btn.id = 'drift-toggle';
+  document.body.appendChild(btn);
+
+  function render() {
+    const off = _driftDisabled();
+    btn.textContent = off ? '▶' : '❙❙';
+    btn.title = PS(off ? 'driftOff' : 'driftOn');
+    btn.setAttribute('aria-label', btn.title);
+  }
+  window.__renderDriftToggle3d = render;
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const off = !_driftDisabled();
+    try { localStorage.setItem(DRIFT_PREF_KEY, off ? '1' : '0'); } catch (err) {}
+    render();
+  });
+  render();
+})();
 
 // ── Default view — the scene's 2D render framing when available ─────────────
 let _homeView = null;   // captured after the initial framing
@@ -615,10 +1149,12 @@ void main() {
 `;
 
 let _vol = null;
-async function initVolume(volId) {
+async function initVolume(preload) {
+  const volId = preload.id;
   try {
-    const meta = await (await fetch(`volumes/${volId}.json?v=${CLOUD_VERSION}`)).json();
-    const buf  = await (await fetch(`volumes/${volId}.bin?v=${CLOUD_VERSION}`)).arrayBuffer();
+    // Bytes were already requested at page top (see _volPreload) — just await them.
+    const meta = await preload.meta;
+    const buf  = await preload.buf;
     const [NX, NY, NZ] = meta.shape;
 
     // Pack NZ slices into a 2D atlas — WebGL 1 has no sampler3D
@@ -738,10 +1274,7 @@ function renderVolumePass() {
   r.autoClear = oldAutoClear;
 }
 
-{
-  const volId = sceneVolume(SCENE_ID);
-  if (volId) initVolume(volId);
-}
+if (_volPreload) initVolume(_volPreload);
 
 // ── FPS counter ───────────────────────────────────────────────────────────────
 let frames = 0, fpsT = performance.now();
