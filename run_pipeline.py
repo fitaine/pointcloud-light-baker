@@ -70,12 +70,50 @@ def raster_res(path):
         return None
 
 
+def downsample_raster(src, dst, factor):
+    """Downsample a GeoTIFF by integer factor, preserving geo tags."""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    img = Image.open(src)
+    scale = img.tag_v2[33550]
+    tie   = img.tag_v2[33922]
+    w, h  = img.size
+    small = img.resize((w // factor, h // factor), Image.BOX)
+    new_scale = (scale[0] * factor, scale[1] * factor, scale[2])
+    from PIL.TiffImagePlugin import ImageFileDirectory_v2
+    ifd = ImageFileDirectory_v2()
+    # copy only the GeoTIFF tags — NOT strip offsets / dimensions, which
+    # belong to the full-size source and would corrupt the resized file
+    for tag in (33550, 33922, 34735, 34736, 34737):
+        if tag in img.tag_v2:
+            ifd[tag] = img.tag_v2[tag]
+    ifd[33550] = new_scale
+    ifd[33922] = tie
+    small.save(dst, tiffinfo=ifd)
+    print(f"  downsampled {os.path.basename(src)} ÷{factor} → "
+          f"{small.size[0]}x{small.size[1]} @ {new_scale[0]:g} m/px")
+
+
 def ensure_native_raster(lit_dir, blend_dir, slug, current, want_res=NATIVE_RES):
     """Never trust the raster in the folder — measure it. If it's missing or
     coarser than want_res, fetch the IGN BDORTHO at that resolution over
     the exact extent of the lit tiles. Returns the raster path to use."""
     res = raster_res(current) if current else None
     if res is not None and res <= want_res + 0.01:
+        # Raster is fine enough — but if it's much finer than needed, downsample
+        # so albedo_relight doesn't have to load a multi-GB array.
+        if want_res > 0 and res < want_res / 4:
+            factor = max(2, int(round(want_res / res)))
+            ds_name = (os.path.basename(current)
+                       .replace('_raster.tif',
+                                f'_ds{int(round(want_res*100)):03d}_raster.tif'))
+            ds_path = os.path.join(os.path.dirname(current), ds_name)
+            if not os.path.exists(ds_path):
+                downsample_raster(current, ds_path, factor)
+            else:
+                ds_res = raster_res(ds_path) or want_res
+                print(f"  raster ok (downsampled): {ds_name} @ {ds_res:g} m/px")
+            return ds_path
         print(f"  raster ok: {os.path.basename(current)} @ {res:g} m/px")
         return current
     if res is not None:
@@ -253,6 +291,16 @@ def main():
         die("usage: python run_pipeline.py <scene.blend> [--both] [--test]")
     both = "--both" in sys.argv[2:]
     test = "--test" in sys.argv[2:]
+    # Optional clean-name overrides:  --slug=NAME  --label="Human Name".
+    # With --slug the published detail cloud is written as <NAME>.copc.laz and
+    # registered under id NAME (no "-detail" suffix) — use when the blend
+    # filename would otherwise produce an ugly auto-slug.
+    slug_override = label_override = None
+    for _a in sys.argv[2:]:
+        if _a.startswith("--slug="):
+            slug_override = _a[len("--slug="):].strip() or None
+        elif _a.startswith("--label="):
+            label_override = _a[len("--label="):].strip() or None
     # No flag? Ask. (--test or --full skip the question; non-interactive runs
     # — schedulers, scripts — default to full quality without blocking.)
     if not test and "--full" not in sys.argv[2:] and sys.stdin.isatty():
@@ -273,7 +321,8 @@ def main():
         print("\n  ── TEST PRESET — fast low-quality run, outputs suffixed -test ──")
         scene_name += "-test"
     n_frames   = N_FRAMES_TEST if test else N_FRAMES
-    slug       = re.sub(r"[^a-z0-9]+", "-", scene_name.lower()).strip("-")
+    slug       = slug_override or re.sub(r"[^a-z0-9]+", "-", scene_name.lower()).strip("-")
+    label_base = label_override or scene_name
     capture    = os.path.join(HERE, "gs-capture", "output", scene_name)
     tiles_dir  = os.path.join(blend_dir, "LIDAR", "LIDAR Bases IGN")
     suffix     = "-test" if test else ""
@@ -282,7 +331,12 @@ def main():
     copc_out   = os.path.join(HERE, "potree", "pointclouds", f"{slug}.copc.laz")
 
     rasters = glob.glob(os.path.join(blend_dir, "LIDAR", "output", "*_raster.tif"))
-    raster  = max(rasters, key=os.path.getsize) if rasters else None
+    # In test mode prefer the smallest (lowest-res) raster to avoid loading a
+    # multi-GB native ortho; in full mode prefer the largest (highest-res).
+    if rasters:
+        raster = min(rasters, key=os.path.getsize) if test else max(rasters, key=os.path.getsize)
+    else:
+        raster = None
 
     print(f"  blend   : {blend}")
     print(f"  tiles   : {tiles_dir}")
@@ -340,15 +394,24 @@ def main():
                             "--capture", capture])
         if r.returncode != 0:
             die("relight failed")
-        detail_out = os.path.join(HERE, "potree", "pointclouds",
-                                  f"{slug}-detail.copc.laz")
-        variants.append((lit2_dir, detail_out, f"{slug}-detail",
-                         f"{scene_name} · Detail"))
-        if both:
-            variants.append((lit_dir, copc_out, slug, scene_name))
+        if slug_override:
+            # explicit public name → publish the detail cloud as <slug>.copc.laz
+            variants.append((lit2_dir, copc_out, slug, label_base))
+            if both:
+                plain_out = os.path.join(HERE, "potree", "pointclouds",
+                                         f"{slug}-reproj.copc.laz")
+                variants.append((lit_dir, plain_out, f"{slug}-reproj",
+                                 f"{label_base} · Reproj"))
+        else:
+            detail_out = os.path.join(HERE, "potree", "pointclouds",
+                                      f"{slug}-detail.copc.laz")
+            variants.append((lit2_dir, detail_out, f"{slug}-detail",
+                             f"{scene_name} · Detail"))
+            if both:
+                variants.append((lit_dir, copc_out, slug, scene_name))
     else:
         print("  no raster available — publishing plain reprojection only")
-        variants.append((lit_dir, copc_out, slug, scene_name))
+        variants.append((lit_dir, copc_out, slug, label_base))
 
     # ── Stage 3 — merge to COPC (both variants) ──────────────────────────────
     rebuilt = False
@@ -387,13 +450,22 @@ def main():
     changed = False
     view = compute_scene_view(capture)
     for _, _, scene_id, label in variants:
+        entry = json.dumps({"label": label, "view": view}) if view else f'"{label}"'
         if f'"{scene_id}"' not in html:
-            entry = json.dumps({"label": label, "view": view}) if view else f'"{label}"'
             html = html.replace("const SCENES = {",
                                 f'const SCENES = {{\n  "{scene_id}": {entry},', 1)
             changed = True
             print(f"  added scene '{scene_id}' to SCENES"
                   + (" (with 2D-render default view)" if view else ""))
+        elif view:
+            # Scene already registered — update view/label in place so re-running
+            # the pipeline after moving the blend camera actually takes effect.
+            pat = '"' + re.escape(scene_id) + r'":\s*(\{(?:[^{}]|\{[^{}]*\})*\}|"[^"]*")'
+            html = re.sub(pat,
+                lambda m, _s=scene_id, _e=entry: f'"{_s}": {_e}',
+                html, count=1)
+            changed = True
+            print(f"  updated view for '{scene_id}'")
     if rebuilt:
         m = re.search(r'const CLOUD_VERSION = "(\d+)"', html)
         if m:

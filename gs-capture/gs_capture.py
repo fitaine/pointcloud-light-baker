@@ -41,7 +41,7 @@ if TEST_MODE:
 # multi-view averaging acts as a second denoiser on top of Blender's.
 RENDER_WIDTH     = 4096
 RENDER_HEIGHT    = 4096
-RENDER_SAMPLES   = 128
+RENDER_SAMPLES   = 512
 RENDER_FORMAT    = "WEBP"       # WEBP (~30% smaller than JPEG), JPEG, or PNG (lossless)
 RENDER_QUALITY   = 90           # WEBP/JPEG quality (90 is visually lossless)
 

@@ -119,12 +119,18 @@ def auto_align(capture_dir, tiles_dir, max_residual=MAX_ALIGN_RESIDUAL):
     rdem = rdem.reshape(W, H)
     log(f"alignment DEMs: blend {bW}x{bH}, tiles {W}x{H} @ {cell}m")
 
+    # Minimum overlapping valid cells for a candidate offset to count. A fixed
+    # 5000 is fine for large scenes but impossible for a small crop whose blend
+    # DEM has fewer cells than that — scale to the cloud size (need at least
+    # half its valid cells to overlap), capped at 5000 so big scenes are
+    # unchanged. The residual guard below still rejects true misalignments.
+    min_overlap = min(5000, max(200, int(0.5 * bval.sum())))
     best = None
     for dx in range(0, W - bW + 1):
         for dy in range(0, H - bH + 1):
             sub = rdem[dx:dx+bW, dy:dy+bH]
             m = bval & (sub > -1e8)
-            if m.sum() < 5000:
+            if m.sum() < min_overlap:
                 continue
             dz = sub[m] - bdem[m]
             med = np.median(dz)
@@ -163,6 +169,8 @@ class OrthoSampler:
     (ModelPixelScale 33550 + ModelTiepoint 33922) — no GDAL dependency."""
 
     def __init__(self, path):
+        Image.MAX_IMAGE_PIXELS = None   # large orthos exceed PIL's bomb guard
+        log(f"loading ortho {os.path.basename(path)} …")
         img = Image.open(path)
         scale = img.tag_v2[33550]      # (sx, sy, sz)
         tie = img.tag_v2[33922]        # (i, j, k, X, Y, Z) — pixel 0,0 → X,Y
