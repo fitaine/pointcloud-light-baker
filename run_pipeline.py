@@ -254,6 +254,24 @@ def compute_scene_view(capture):
     M = sc["transform_matrix"]
     pos = [M[0][3] + off[0], M[1][3] + off[1], M[2][3] + off[2]]
     fwd = [-M[0][2], -M[1][2], -M[2][2]]          # camera -Z in world
+
+    # Camera shift offsets the frustum centre from the optical axis. The tiled
+    # render pipeline uses shift_y to compose the frame, so a view built from the
+    # raw camera axis points somewhere the 2D render never showed. Convert the
+    # shift into a tilt of the view direction: an offset of s mm on the sensor at
+    # focal length `lens` is an angle atan(s / lens).
+    _sx, _sy = sc.get("shift_x", 0.0) or 0.0, sc.get("shift_y", 0.0) or 0.0
+    if _sx or _sy:
+        right = [M[0][0], M[1][0], M[2][0]]
+        up    = [M[0][1], M[1][1], M[2][1]]
+        # Blender measures shift as a fraction of the sensor's FIT dimension.
+        _fit = sc["sensor_width"]
+        if sc.get("sensor_fit") == "VERTICAL":
+            _fit = sc.get("sensor_height") or sc["sensor_width"]
+        d = [fwd[i] * sc["lens"] + right[i] * (_sx * _fit) + up[i] * (_sy * _fit)
+             for i in range(3)]
+        n = math.sqrt(sum(c * c for c in d)) or 1.0
+        fwd = [c / n for c in d]
     # aim point: along the view axis, at the distance of the cloud centre
     dist = 1500.0
     meta_path = os.path.join(capture, "cloud_dem_meta.json")

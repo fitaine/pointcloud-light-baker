@@ -366,7 +366,13 @@ if _scene_cam is not None and _scene_cam.data is not None:
         "transform_matrix": [list(row) for row in _scene_cam.matrix_world],
         "lens": _scene_cam.data.lens,
         "sensor_width": _scene_cam.data.sensor_width,
+        "sensor_height": _scene_cam.data.sensor_height,
         "sensor_fit": _scene_cam.data.sensor_fit,
+        # Framing shift. The tiled-render pipeline uses shift_y to compose, so a
+        # view derived from the raw camera axis aims somewhere the 2D render
+        # never showed (Carrière de la Buisse: shift_y -0.065 = 0.93 deg too high).
+        "shift_x": _scene_cam.data.shift_x,
+        "shift_y": _scene_cam.data.shift_y,
         "res_x": bpy.context.scene.render.resolution_x,
         "res_y": bpy.context.scene.render.resolution_y,
     }
