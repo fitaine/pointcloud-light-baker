@@ -323,11 +323,20 @@ def main():
     # registered under id NAME (no "-detail" suffix) — use when the blend
     # filename would otherwise produce an ugly auto-slug.
     slug_override = label_override = None
+    # Alignment guard override. The residual is the mean absolute deviation of
+    # per-cell max-Z differences on a 10 m grid, so STEEP terrain (cliff faces
+    # spanning hundreds of metres inside one cell) and forest canopy both
+    # inflate it even when the offset is exactly right — Lac des Milles vaches
+    # needed 2.65 m with a verifiably correct alignment. Test mode already
+    # relaxes to 5; this exposes the same lever for production runs.
+    max_residual = None
     for _a in sys.argv[2:]:
         if _a.startswith("--slug="):
             slug_override = _a[len("--slug="):].strip() or None
         elif _a.startswith("--label="):
             label_override = _a[len("--label="):].strip() or None
+        elif _a.startswith("--max-residual="):
+            max_residual = _a[len("--max-residual="):].strip() or None
     # No flag? Ask. (--test or --full skip the question; non-interactive runs
     # — schedulers, scripts — default to full quality without blocking.)
     if not test and "--full" not in sys.argv[2:] and sys.stdin.isatty():
@@ -402,6 +411,8 @@ def main():
         # decimated points + relaxed alignment guard: forest canopy inflates
         # the residual; in test mode favour getting through the pipeline
         cmd += ["--decimate", str(TEST_DECIMATE), "--max-residual", "5"]
+    elif max_residual:
+        cmd += ["--max-residual", str(max_residual)]
     if raster:
         cmd += ["--raster", raster]
     r = subprocess.run(cmd)
@@ -432,10 +443,12 @@ def main():
         else:
             detail_out = os.path.join(HERE, "potree", "pointclouds",
                                       f"{slug}-detail.copc.laz")
+            # label_base, not scene_name: --label must work on its own, not
+            # only when paired with --slug (it defaults to scene_name anyway)
             variants.append((lit2_dir, detail_out, f"{slug}-detail",
-                             f"{scene_name} · Detail"))
+                             f"{label_base} · Detail"))
             if both:
-                variants.append((lit_dir, copc_out, slug, scene_name))
+                variants.append((lit_dir, copc_out, slug, label_base))
     else:
         print("  no raster available — publishing plain reprojection only")
         variants.append((lit_dir, copc_out, slug, label_base))
