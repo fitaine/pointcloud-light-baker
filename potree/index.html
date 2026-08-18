@@ -340,6 +340,11 @@ window.addEventListener('message', e => {
     P_LANG = e.data.lang;
     _applyLang();
   }
+  // The shell's "Destinations" button drives this panel while we are embedded:
+  // one obvious control instead of a small unlabelled pill inside the iframe.
+  if (e.data && e.data.type === 'shell-toggle-scenes' && window.__toggleSceneMenu) {
+    window.__toggleSceneMenu();
+  }
 });
 
 // ── Scene config ────────────────────────────────────────────────────────────
@@ -405,12 +410,22 @@ if (isEmbed) {
   // 3D scenes without bouncing back to the 2D gallery. The gallery host still
   // owns the loading veil + badge, so those stay hidden.
   // In embed mode the shell's topbar provides the 2D/3D switch — hide ours.
-  st.textContent = ".embed #badge, .embed #loading, .embed #topright { display: none !important; }";
+  st.textContent = ".embed #badge, .embed #loading, .embed #topright { display: none !important; }"
+  // #scene-nav too: in the shell, "Destinations" now lists the scenes. Two
+  // menus for the same job, one of them a small unlabelled pill, was the
+  // confusing part — keep the big obvious one.
+  + ".embed #scene-pill { display: none !important; }";
   document.head.appendChild(st);
 }
 
 function notifyLoaded() {
-  if (isEmbed) window.parent.postMessage({ type: 'potree-loaded' }, '*');
+  if (isEmbed) {
+    window.parent.postMessage({ type: 'potree-loaded' }, '*');
+    // Hand the shell our scene list so ITS "Destinations" menu can drive 3D.
+    // Single source of truth: PUBLISHED lives here, the shell just renders it.
+    window.parent.postMessage({ type: 'potree-scenes', scenes: PUBLISHED,
+                                current: SCENE_ID }, '*');
+  }
 }
 
 // Pick scene from URL ?scene=chamechaude, or default to first
@@ -447,47 +462,29 @@ function _buildSceneMenuHTML() {
   const pill = document.getElementById("scene-pill") || document.createElement("button");
   pill.id = "scene-pill";
   pill.setAttribute("aria-label", PS('showScenes'));
-  pill.innerHTML = '<span style="font-size:11px;line-height:1">▾</span> ' + PS('scenes') + ' ' +
-                   '<span class="ct">' + PUBLISHED.length + '</span>';
+  pill.innerHTML = '<span style="font-size:11px;line-height:1">▾</span> ' + PS('scenes');
 
   const panel = document.getElementById("scene-panel") || document.createElement("div");
   panel.id = "scene-panel";
 
-  let html = '<div class="sm-head">' +
-               '<span class="lbl">Point clouds</span>' +
-               '<span class="cnt"><b>' + PUBLISHED.length + '</b> ' + PS('live') + '</span>' +
-               '<button class="sm-close" aria-label="' + PS('collapseMenu') + '">✕</button>' +
-             '</div>';
-
-  PUBLISHED.forEach((s, i) => {
-    const idx     = String(i + 1).padStart(2, "0");
+  // Deliberately bare: no header, no count, no close cross (the Destinations
+  // button toggles it), no index numbers, no subtitles, no ghost "soon" rows.
+  // Just the scenes you can actually go to, plus the one line saying more are
+  // coming. Everything else was noise around a six-item list.
+  let html = '';
+  PUBLISHED.forEach(s => {
     const current = s.id === SCENE_ID;
     html += '<button class="sm-row' + (current ? " current" : "") + '"' +
               ' data-scene="' + s.id + '"' + (current ? " disabled" : "") + '>' +
-              '<span class="sm-idx">' + idx + '</span>' +
-              '<span><span class="sm-name">' + s.name + '</span>' +
-              '<span class="sm-sub">' + s.sub + '</span></span>' +
+              '<span class="sm-name">' + s.name + '</span>' +
               '<span class="sm-tag">' + (current ? PS('viewing') : "→") + '</span>' +
             '</button>';
   });
-
-  if (SOON_COUNT > 0) {
-    html += '<div class="sm-divider"></div>';
-    for (let i = 0; i < SOON_COUNT; i++) {
-      const idx = String(PUBLISHED.length + i + 1).padStart(2, "0");
-      const w   = SOON_BAR_WIDTHS[i % SOON_BAR_WIDTHS.length];
-      html += '<div class="sm-soon">' +
-                '<span class="sm-idx">' + idx + '</span>' +
-                '<span class="bar" style="width:' + w + '"></span>' +
-                '<span class="sm-tag">' + PS('soon') + '</span>' +
-              '</div>';
-    }
-  }
-
   html += '<div class="sm-foot">' + PS('moreScenes') + '</div>';
   panel.innerHTML = html;
   return { pill, panel };
 }
+
 
 (function buildSceneMenu() {
   const navEl = document.getElementById("scene-nav");
@@ -502,9 +499,6 @@ function _buildSceneMenuHTML() {
   // Expose for lang switch rebuild (text only, keeps collapsed state)
   window.__rebuildSceneMenu = function() {
     _buildSceneMenuHTML(); // updates pill + panel in place via getElementById
-    // re-wire close button
-    const cl = document.querySelector(".sm-close");
-    if (cl) cl.addEventListener("click", () => setCollapsed(true));
     // re-wire scene rows
     document.querySelectorAll(".sm-row[data-scene]").forEach(row => {
       row.addEventListener("click", function() { _switchScene(this.dataset.scene); });
@@ -513,20 +507,27 @@ function _buildSceneMenuHTML() {
 
   // Collapse / expand — default open on desktop, collapsed on mobile;
   // a manual toggle is remembered across scenes via localStorage.
+  // Large screens open by default: the list is the main way to move between
+  // scenes, and there is room for it. Phones still start collapsed. A manual
+  // toggle is remembered, but only on mobile — on desktop a stale "collapsed"
+  // from a previous visit is what made the menu feel hidden.
   const isMobile = window.matchMedia("(max-width: 767px)").matches;
-  let collapsed;
-  try {
-    const pref = localStorage.getItem(MENU_PREF_KEY);
-    collapsed = pref === null ? isMobile : pref === "1";
-  } catch (e) { collapsed = isMobile; }
+  let collapsed = false;
+  if (isMobile) {
+    try {
+      const pref = localStorage.getItem(MENU_PREF_KEY);
+      collapsed = pref === null ? true : pref === "1";
+    } catch (e) { collapsed = true; }
+  }
   function setCollapsed(v) {
     navEl.classList.toggle("collapsed", v);
     try { localStorage.setItem(MENU_PREF_KEY, v ? "1" : "0"); } catch (e) {}
   }
   setCollapsed(collapsed);
 
-  pill.addEventListener("click", () => setCollapsed(false));
-  panel.querySelector(".sm-close").addEventListener("click", () => setCollapsed(true));
+  pill.addEventListener("click", () => setCollapsed(!navEl.classList.contains("collapsed")));
+  // The shell's Destinations button drives this while embedded.
+  window.__toggleSceneMenu = () => setCollapsed(!navEl.classList.contains("collapsed"));
 
   // Named function so __rebuildSceneMenu can re-wire after a lang rebuild.
   function _switchScene(id) {
