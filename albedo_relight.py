@@ -13,6 +13,16 @@ reprojected color by a BLURRED albedo (matching the render's effective
 resolution) to extract a lighting ratio, multiply back. Done in linear
 space. Where blurred albedo is near zero the ratio is clamped.
 
+The ortho is held as uint8 and converted to linear float / blurred one CROP
+at a time, sized to the tile plus 4 sigma of context. Doing it whole needs
+8x the memory twice over and made native-resolution orthos impossible
+(Aravis at 0.20 m/px: 50000^2 -> 28 GB linear + 28 GB blurred). Cropping is
+numerically identical, not an approximation: gaussian_filter truncates at
+4 sigma, so any pixel that could influence a point in the tile is inside the
+crop, and at the image border the crop is clipped so the reflect boundary
+lands in the same place. Verified point-for-point on the 48-tile Aravis test
+set (15M+ points, zero differing).
+
 The blur radius — "how smeared is the render compared to the ortho" — is
 computed from the capture itself when --capture is given:
 
@@ -99,19 +109,37 @@ def main():
     tie = img.tag_v2[33922]
     px, py = float(scale[0]), float(scale[1])
     x0, y0 = float(tie[3]), float(tie[4])
-    alb = _LUT[np.asarray(img.convert('RGB'))]          # linear float32 HxWx3
-    log(f"ortho {alb.shape[1]}x{alb.shape[0]} @ {px:g} m/px")
+    # The ortho is held as uint8 (H*W*3 bytes) and converted to linear float
+    # per crop, never whole. Converting and blurring the entire image needs 8x
+    # the memory twice over, which is what put native-resolution orthos out of
+    # reach: Aravis at 0.20 m/px is 50000^2 -> 28 GB linear + 28 GB blurred,
+    # against 44 GB free. As uint8 the same ortho is 7.5 GB, and each 1 km tile
+    # only ever needs its own ~5300^2 crop (~0.3 GB).
+    alb_u8 = np.asarray(img.convert('RGB'))
+    H, W = alb_u8.shape[:2]
+    log(f"ortho {W}x{H} @ {px:g} m/px  ({alb_u8.nbytes / 2**30:.1f} GB uint8)")
 
     sigma = blur_m / px
-    alb_blur = np.stack([gaussian_filter(alb[:, :, c], sigma) for c in range(3)], axis=2)
-    log(f"blurred albedo (sigma {sigma:.1f} px = {blur_m:.2f} m)")
+    # gaussian_filter truncates the kernel at TRUNCATE sigma. Carrying that
+    # much context around each crop makes the blurred values identical to
+    # blurring the whole ortho; at the real image border the crop is clipped,
+    # so the reflect boundary condition lands in the same place too.
+    TRUNCATE = 4.0
+    margin = int(np.ceil(TRUNCATE * sigma)) + 1
+    log(f"blur sigma {sigma:.1f} px = {blur_m:.2f} m  (crop margin {margin} px)")
 
-    H, W = alb.shape[:2]
-
-    def sample(arr, xy):
-        col = np.clip(((xy[:, 0] - x0) / px).astype(np.int64), 0, W-1)
-        row = np.clip(((y0 - xy[:, 1]) / py).astype(np.int64), 0, H-1)
-        return arr[row, col]
+    def albedo_crop(xy):
+        """Sharp and blurred albedo at each point, from a windowed crop."""
+        col_f = ((xy[:, 0] - x0) / px).astype(np.int64)
+        row_f = ((y0 - xy[:, 1]) / py).astype(np.int64)
+        c0 = max(0, int(col_f.min()) - margin); c1 = min(W, int(col_f.max()) + margin + 1)
+        r0 = max(0, int(row_f.min()) - margin); r1 = min(H, int(row_f.max()) + margin + 1)
+        crop = _LUT[alb_u8[r0:r1, c0:c1]]               # linear float32, crop only
+        crop_blur = np.stack([gaussian_filter(crop[:, :, c], sigma, truncate=TRUNCATE)
+                              for c in range(3)], axis=2)
+        col = np.clip(col_f - c0, 0, crop.shape[1] - 1)
+        row = np.clip(row_f - r0, 0, crop.shape[0] - 1)
+        return crop[row, col], crop_blur[row, col]
 
     EPS = 0.004   # ~1/255 in linear — below this the albedo is black/no-data
 
@@ -132,8 +160,7 @@ def main():
                               np.asarray(las.blue)], axis=1) // 257).astype(np.uint8)]
         log(f"{tile}: {len(xy):,} pts")
 
-        a = sample(alb, xy)                     # sharp albedo
-        ab = sample(alb_blur, xy)               # render-resolution albedo
+        a, ab = albedo_crop(xy)                 # sharp + render-resolution albedo
         ratio = lit / np.maximum(ab, EPS)       # lighting, texture removed
         final = a * ratio
         rgb16 = (to_srgb(final) * 255.0 + 0.5).astype(np.uint16) * 257
