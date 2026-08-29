@@ -142,7 +142,17 @@ def main():
     if remote_size.isdigit() and int(remote_size) == size:
         print(f"  cloud already on server ({size:,} bytes) — skipping upload")
     else:
-        have = int(remote_size) if remote_size.isdigit() else 0
+        # A blank answer means the STAT failed (dropped ssh, timeout), NOT that
+        # the file is absent — "file absent" comes back as the literal 0 from
+        # the `|| echo 0` above. Treating "I could not tell" as "start over"
+        # silently overwrites a partial upload with a fresh one: that is how
+        # 3.4 GB of a 7.75 GB transfer was destroyed on 2026-08-29. Refuse
+        # instead, and let the operator rerun once the link is back.
+        if not remote_size.isdigit():
+            die("could not read the server-side size (ssh/stat failed).\n"
+                "       NOT uploading: a partial file may be on the server and\n"
+                "       starting over would overwrite it. Rerun when the link is back.")
+        have = int(remote_size)
         if 0 < have < size:
             print(f"  partial upload found ({100 * have / size:.0f}%) — resuming")
         else:
@@ -152,8 +162,12 @@ def main():
         # reput continues from whatever is already there. Worse, scp has been
         # seen to exit 0 on a truncated file — which is why the md5 check below
         # is not optional.
+        # But reput STATS the remote file first and fails outright when there is
+        # nothing to resume ("stat remote: No such file or directory"), so a
+        # scene's FIRST deploy has to be a plain put.
+        verb = "reput" if have > 0 else "put"
         local_fwd = cloud.replace("\\", "/")
-        batch = f'reput "{local_fwd}" "{REMOTE_REL}/pointclouds/{scene_id}.copc.laz"\nbye\n'
+        batch = f'{verb} "{local_fwd}" "{REMOTE_REL}/pointclouds/{scene_id}.copc.laz"\nbye\n'
         r = subprocess.run(["sftp", "-o", "ConnectTimeout=20", HOST],
                            input=batch, text=True)
         if r.returncode != 0:
