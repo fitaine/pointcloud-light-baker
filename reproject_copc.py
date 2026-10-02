@@ -178,6 +178,38 @@ def auto_align(capture_dir, tiles_dir, max_residual=MAX_ALIGN_RESIDUAL):
     return np.array([tx, ty, dz], dtype=np.float64), extent
 
 
+class Footprint:
+    """XY cutout of the cloud actually loaded in the .blend — the 3D twin of
+    the 2D workflow's camera crop. cloud_dem.npy marks every 10 m cell the
+    blend cloud occupies; raw-tile points outside those cells (plus a
+    FOOTPRINT_PAD-cell margin) are dropped, so the published cloud shows
+    exactly what the .blend shows, not whole IGN tiles."""
+    def __init__(self, capture_dir, pad):
+        bdem = np.load(os.path.join(capture_dir, 'cloud_dem.npy'))
+        with open(os.path.join(capture_dir, 'cloud_dem_meta.json')) as f:
+            meta = json.load(f)
+        self.mn = np.array(meta['min_xy'], dtype=np.float64)
+        self.cell = float(meta['cell'])
+        m = bdem > -1e8
+        for _ in range(pad):                     # binary dilation, 8-neighbour
+            d = m.copy()
+            d[1:, :] |= m[:-1, :]; d[:-1, :] |= m[1:, :]
+            d[:, 1:] |= m[:, :-1]; d[:, :-1] |= m[:, 1:]
+            d[1:, 1:] |= m[:-1, :-1]; d[:-1, :-1] |= m[1:, 1:]
+            d[1:, :-1] |= m[:-1, 1:]; d[:-1, 1:] |= m[1:, :-1]
+            m = d
+        self.mask = m
+
+    def contains(self, xy_blend):
+        ij = np.floor((xy_blend - self.mn) / self.cell).astype(np.int64)
+        W, H = self.mask.shape
+        ok = (ij[:, 0] >= 0) & (ij[:, 0] < W) & (ij[:, 1] >= 0) & (ij[:, 1] < H)
+        out = np.zeros(len(xy_blend), dtype=bool)
+        out[ok] = self.mask[ij[ok, 0], ij[ok, 1]]
+        return out
+
+
+FOOTPRINT_PAD = 1   # cells of margin around the blend cloud cutout
 UNSEEN_DIM = 0.15
 
 
@@ -217,6 +249,9 @@ def main():
     ap.add_argument('--max-residual', type=float, default=MAX_ALIGN_RESIDUAL,
                     help='alignment abort threshold in metres (forest canopy '
                          'inflates the residual on downsampled blend clouds)')
+    ap.add_argument('--no-crop', action='store_true',
+                    help='keep whole tiles instead of cutting them to the '
+                         'blend cloud footprint')
     ap.add_argument('--raster', default=None,
                     help='BDORTHO GeoTIFF — unseen points get dimmed satellite '
                          'albedo (x0.15) instead of black')
@@ -252,6 +287,9 @@ def main():
     if not selected:
         sys.exit("ERROR: no tiles overlap the blend cloud footprint.")
     log(f"{len(selected)} tiles selected")
+    foot = None if args.no_crop else Footprint(args.capture_dir, FOOTPRINT_PAD)
+    if foot is not None:
+        log(f"cutout: {int(foot.mask.sum()):,} footprint cells @ {foot.cell:g} m")
     ortho = OrthoSampler(args.raster) if args.raster else None
     if ortho is None:
         print("WARNING: no --raster — unseen points will be black. "
@@ -303,9 +341,12 @@ def main():
         parts = []
         for t in selected:
             las = laspy.read(os.path.join(args.tiles_dir, t))
-            parts.append((np.stack([np.asarray(las.x), np.asarray(las.y),
-                                    np.asarray(las.z)], axis=1)[::ZSTRIDE]
-                          - origin).astype(np.float64))
+            p = (np.stack([np.asarray(las.x), np.asarray(las.y),
+                           np.asarray(las.z)], axis=1)[::ZSTRIDE]
+                 - origin).astype(np.float64)
+            if foot is not None:
+                p = p[foot.contains(p[:, :2])]
+            parts.append(p)
             del las
         ref = np.concatenate(parts)
         del parts
@@ -351,6 +392,16 @@ def main():
         las = laspy.read(tpath)
         if args.decimate > 1:
             las.points = las.points[::args.decimate]
+        if foot is not None:
+            keep = foot.contains(np.stack([np.asarray(las.x), np.asarray(las.y)],
+                                          axis=1) - origin[:2])
+            if not keep.any():
+                log("no points inside the blend cutout — tile skipped")
+                del las
+                continue
+            if not keep.all():
+                log(f"cutout keeps {keep.sum()/len(keep)*100:.1f}% of tile")
+                las.points = las.points[keep]
         xyz = np.stack([np.asarray(las.x), np.asarray(las.y), np.asarray(las.z)],
                        axis=1) - origin          # → Blender frame
         n = len(xyz)

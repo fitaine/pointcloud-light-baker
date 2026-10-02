@@ -14,6 +14,7 @@ Usage (via launcher.bat — do not run directly):
 """
 
 import bpy
+import re
 import math
 import json
 import sys
@@ -162,7 +163,11 @@ else:
 # Preferred : Empty named OrbitTarget (or legacy GS_TARGET) in the .blend.
 # Fallback  : bounding-box centre of renderable meshes.
 # NOT falling back to arbitrary empties — they are often light/camera aim helpers.
-target_obj = bpy.data.objects.get(TARGET_NAME) or bpy.data.objects.get(TARGET_LEGACY)
+# Name match ignores case, spaces and underscores: "orbit target" == OrbitTarget.
+_norm = lambda n: re.sub(r"[\s_]+", "", n).lower()
+_wanted = {_norm(TARGET_NAME), _norm(TARGET_LEGACY)}
+target_obj = next((o for o in bpy.context.scene.objects
+                   if o.type == 'EMPTY' and _norm(o.name) in _wanted), None)
 if target_obj is not None:
     target = target_obj.location.copy()
     print(f"[GS Capture] {target_obj.name} : {target.x:.1f}, {target.y:.1f}, {target.z:.1f}")
@@ -296,6 +301,14 @@ with open(_dbg, "a") as _f:
         _f.write(f"scene_cam lens: {_scene_cam.data.lens} mm\n")
 cam_obj = bpy.data.objects.new("GS_Cam", cam_data)
 bpy.context.scene.collection.objects.link(cam_obj)
+# Timeline camera markers rebind scene.camera on every frame change, and
+# render.render() itself re-applies the frame, so any marker would swap the
+# scene camera back in for every orbit frame (Plagne: F_1726 → all 26 frames
+# identical to cam_scene). Unbind them in memory only; the .blend is never saved.
+for _m in scene.timeline_markers:
+    if _m.camera is not None:
+        print(f"[GS Capture] marker '{_m.name}' camera '{_m.camera.name}' unbound for the orbit")
+        _m.camera = None
 scene.camera = cam_obj
 
 # ── Orbital render loop ───────────────────────────────────────────────────────
@@ -317,6 +330,9 @@ for idx, (elev, azimuth, name) in enumerate(camera_specs):
 
     # frame_set() forces a full depsgraph update including Geometry Nodes.
     bpy.context.scene.frame_set(bpy.context.scene.frame_current)
+    # ...and re-applies timeline camera markers, silently swapping the scene
+    # camera back in (Plagne: every orbit frame came out as cam_scene).
+    scene.camera = cam_obj
 
     # Camera transforms are deterministic (computed from constants), so a
     # frame already on disk can be skipped on relaunch — render resume.
@@ -326,6 +342,9 @@ for idx, (elev, azimuth, name) in enumerate(camera_specs):
     else:
         scene.render.filepath = filepath
         bpy.ops.render.render(write_still=True)
+        if scene.camera is not cam_obj:
+            raise SystemExit(f"[GS Capture] ERROR: render used '{scene.camera.name}', "
+                             "not the orbit camera — something rebinds scene.camera")
         print(f"[GS Capture] {idx+1:3d}/{total}  {name}  ({x:.0f}, {y:.0f}, {z:.0f})")
 
     # Camera-to-world matrix — Blender convention (X-right, Y-up, -Z fwd)

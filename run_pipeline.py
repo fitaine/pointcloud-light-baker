@@ -357,16 +357,23 @@ def main():
         print("\n  ── TEST PRESET — fast low-quality run, outputs suffixed -test ──")
         scene_name += "-test"
     n_frames   = N_FRAMES_TEST if test else N_FRAMES
+    if test and slug_override:
+        slug_override += "-test"
     slug       = slug_override or re.sub(r"[^a-z0-9]+", "-", scene_name.lower()).strip("-")
     label_base = label_override or scene_name
     capture    = os.path.join(HERE, "gs-capture", "output", scene_name)
     tiles_dir  = os.path.join(blend_dir, "LIDAR", "LIDAR Bases IGN")
+    # Older scenes (Plagne) keep raw tiles in LIDAR/tiles/ instead
+    _alt_tiles = os.path.join(blend_dir, "LIDAR", "tiles")
+    if not os.path.isdir(tiles_dir) and glob.glob(os.path.join(_alt_tiles, "*.laz")):
+        tiles_dir = _alt_tiles
     suffix     = "-test" if test else ""
     lit_dir    = os.path.join(blend_dir, "LIDAR", f"output-lit-tiles{suffix}")
     lit2_dir   = os.path.join(blend_dir, "LIDAR", f"output-lit2-tiles{suffix}")
     copc_out   = os.path.join(HERE, "potree", "pointclouds", f"{slug}.copc.laz")
 
-    rasters = glob.glob(os.path.join(blend_dir, "LIDAR", "output", "*_raster.tif"))
+    rasters = (glob.glob(os.path.join(blend_dir, "LIDAR", "output", "*_raster.tif"))
+               or glob.glob(os.path.join(blend_dir, "LIDAR", "*_raster.tif")))
     # In test mode prefer the smallest (lowest-res) raster to avoid loading a
     # multi-GB native ortho; in full mode prefer the largest (highest-res).
     if rasters:
